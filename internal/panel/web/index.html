@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>IPv6 SOCKS5 管理面板</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">XRAY · IPV6 EGRESS</p>
+        <h1>SOCKS5 线路控制台</h1>
+        <p class="subtitle">每条入口独享 IPv6，切换前验证，失败自动保留旧线路。</p>
+      </div>
+      <div id="healthBadge" class="health pending"><span></span>正在连接</div>
+    </header>
+
+    <section class="metrics" aria-label="系统状态">
+      <article><span>公网前缀</span><strong id="prefix">—</strong></article>
+      <article><span>宿主网卡</span><strong id="iface">—</strong></article>
+      <article><span>活跃线路</span><strong id="proxyCount">—</strong></article>
+      <article><span>共用账号</span><strong id="username">—</strong></article>
+    </section>
+
+    <section class="toolbar">
+      <div>
+        <h2>代理线路</h2>
+        <p id="rangeHint">端口自动分配，最多 100 条</p>
+      </div>
+      <div class="actions">
+        <button id="rotateAllBtn" class="button secondary">全部更换 IPv6</button>
+        <button id="addBtn" class="button primary">＋ 新增 SOCKS5</button>
+      </div>
+    </section>
+
+    <div id="jobPanel" class="job hidden">
+      <div><strong>批量更换中</strong><span id="jobText">0 / 0</span></div>
+      <div class="progress"><i id="jobProgress"></i></div>
+    </div>
+
+    <section class="tableWrap">
+      <table>
+        <thead><tr><th>端口</th><th>绑定 IPv6</th><th>状态</th><th>最近更换</th><th class="right">操作</th></tr></thead>
+        <tbody id="proxyRows"><tr><td colspan="5" class="empty">正在加载线路…</td></tr></tbody>
+      </table>
+    </section>
+
+    <p class="warning">管理页和 API 没有鉴权，SOCKS5 流量也不加密。请仅在可信局域网中使用，并通过防火墙限制访问。</p>
+  </div>
+
+  <dialog id="addDialog">
+    <form method="dialog" id="addForm">
+      <div class="dialogHead"><div><p class="eyebrow">NEW ROUTE</p><h3>新增 SOCKS5</h3></div><button value="cancel" class="iconBtn" aria-label="关闭">×</button></div>
+      <label class="check"><input id="manualPort" type="checkbox"><span>手动指定端口</span></label>
+      <label id="portField" class="field hidden"><span>端口</span><input id="portInput" type="number" min="1" max="65535" inputmode="numeric"></label>
+      <p class="dialogNote">创建时会自动生成、绑定并验证新的公网 IPv6。</p>
+      <div class="dialogActions"><button value="cancel" class="button ghost">取消</button><button id="confirmAdd" value="default" class="button primary">创建线路</button></div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+.git
+.xray-source
+.xray-source.zip
+.xray-rules-add.go
+data
+*.zip
+*.exe
+README*.tmp

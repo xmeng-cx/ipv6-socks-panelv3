@@ -1,0 +1,7 @@
+.env
+data/
+.xray-source/
+.xray-source.zip
+.xray-rules-add.go
+*.exe
+*.zip
