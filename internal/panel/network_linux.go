@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -22,6 +23,7 @@ func NewNetworkManager() NetworkManager { return &LinuxNetwork{} }
 
 func (n *LinuxNetwork) Discover(_ context.Context, ifaceOverride, prefixOverride string) (NetworkInfo, *net.IPNet, error) {
 	var link netlink.Link
+	var preferredSource net.IP
 	var err error
 	if ifaceOverride != "" {
 		link, err = netlink.LinkByName(ifaceOverride)
@@ -44,11 +46,22 @@ func (n *LinuxNetwork) Discover(_ context.Context, ifaceOverride, prefixOverride
 				candidate, findErr := netlink.LinkByIndex(route.LinkIndex)
 				if findErr == nil {
 					link, bestMetric = candidate, route.Priority
+					preferredSource = append(net.IP(nil), route.Src...)
 				}
 			}
 		}
 		if link == nil {
 			return NetworkInfo{}, nil, fmt.Errorf("no IPv6 default route found; set IPV6_INTERFACE and IPV6_PREFIX")
+		}
+	}
+	if !isPublicIPv6(preferredSource) {
+		if routes, lookupErr := netlink.RouteGet(net.ParseIP("2001:4860:4860::8888")); lookupErr == nil {
+			for _, route := range routes {
+				if route.LinkIndex == link.Attrs().Index && isPublicIPv6(route.Src) {
+					preferredSource = append(net.IP(nil), route.Src...)
+					break
+				}
+			}
 		}
 	}
 
@@ -78,11 +91,9 @@ func (n *LinuxNetwork) Discover(_ context.Context, ifaceOverride, prefixOverride
 		if len(prefixes) == 0 {
 			return NetworkInfo{}, nil, fmt.Errorf("no public IPv6 prefix on %s; set IPV6_PREFIX", link.Attrs().Name)
 		}
-		if len(prefixes) > 1 {
-			return NetworkInfo{}, nil, fmt.Errorf("multiple public IPv6 prefixes on %s; set IPV6_PREFIX explicitly", link.Attrs().Name)
-		}
-		for _, cidr := range prefixes {
-			prefix = cidr
+		prefix, err = chooseDiscoveredPrefix(prefixes, preferredSource)
+		if err != nil {
+			return NetworkInfo{}, nil, fmt.Errorf("select public IPv6 prefix on %s: %w", link.Attrs().Name, err)
 		}
 	}
 
@@ -95,6 +106,31 @@ func (n *LinuxNetwork) Discover(_ context.Context, ifaceOverride, prefixOverride
 		}
 	}
 	return NetworkInfo{Interface: link.Attrs().Name, Prefix: prefix.String(), IPv4: ipv4}, prefix, nil
+}
+
+// chooseDiscoveredPrefix favors the prefix containing the source address chosen
+// by the kernel's IPv6 default route. The sorted fallback keeps auto-detection
+// deterministic on hosts whose route lookup does not expose a source address.
+func chooseDiscoveredPrefix(prefixes map[string]*net.IPNet, preferredSource net.IP) (*net.IPNet, error) {
+	keys := make([]string, 0, len(prefixes))
+	for key, prefix := range prefixes {
+		ones, bits := prefix.Mask.Size()
+		if bits == 128 && ones < 128 {
+			keys = append(keys, key)
+		}
+	}
+	if len(keys) == 0 {
+		return nil, fmt.Errorf("no IPv6 prefix with host address space found")
+	}
+	sort.Strings(keys)
+	if isPublicIPv6(preferredSource) {
+		for _, key := range keys {
+			if prefixes[key].Contains(preferredSource) {
+				return prefixes[key], nil
+			}
+		}
+	}
+	return prefixes[keys[0]], nil
 }
 
 // pruneCoveredPrefixes removes host routes such as DHCPv6 /128 addresses when

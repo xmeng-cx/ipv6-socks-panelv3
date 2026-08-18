@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>登录 · IPv6 代理管理面板</title><link rel="stylesheet" href="/app.css"></head>
+<body class="loginPage">
+  <main class="loginCard">
+    <p class="eyebrow">XRAY · IPV6 EGRESS</p><h1>欢迎回来</h1><p class="loginLead">登录 IPv6 线路控制台</p>
+    <form id="loginForm">
+      <label class="field"><span>用户名</span><input id="loginUsername" type="text" autocomplete="username" autofocus required></label>
+      <label class="field loginPassword"><span>密码</span><input id="loginPassword" type="password" autocomplete="current-password" required></label>
+      <p id="loginError" class="loginError hidden"></p><button id="loginButton" class="button primary loginButton" type="submit">登录</button>
+    </form>
+    <p class="loginHint">登录状态将在此浏览器中保存 90 天。</p>
+  </main>
+  <script src="/login.js" defer></script>
+</body></html>

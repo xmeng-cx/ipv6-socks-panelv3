@@ -1,0 +1,45 @@
+.metrics article {
+  position: relative;
+}
+
+.prefixMetric {
+  padding-right: 70px !important;
+}
+
+.metricEdit {
+  position: absolute;
+  right: 14px;
+  top: 14px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--mint);
+  padding: 5px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.metricEdit:hover {
+  border-color: var(--mint);
+}
+
+.prefixField {
+  display: block;
+  margin-top: 26px;
+}
+
+.networkField,
+.protocolField {
+  display: block;
+  margin-top: 14px;
+}
+
+.field select {
+  width: 100%;
+  background: #07110f;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  font: inherit;
+}

@@ -8,6 +8,8 @@ import (
 	"log"
 	"net"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,9 +17,11 @@ import (
 )
 
 var (
-	ErrBusy     = errors.New("proxy is busy")
-	ErrNotFound = errors.New("proxy not found")
-	ErrLimit    = errors.New("proxy limit reached")
+	ErrBusy       = errors.New("proxy is busy")
+	ErrNotFound   = errors.New("proxy not found")
+	ErrLimit      = errors.New("proxy limit reached")
+	ErrForbidden  = errors.New("forbidden")
+	ErrUserExists = errors.New("user already exists")
 )
 
 type Manager struct {
@@ -33,6 +37,7 @@ type Manager struct {
 	initErr error
 
 	addMu  sync.Mutex
+	opMu   sync.RWMutex
 	busy   sync.Map
 	jobsMu sync.RWMutex
 	jobs   map[string]*Job
@@ -43,17 +48,33 @@ func NewManager(cfg Config, network NetworkManager, xray XrayController) *Manage
 }
 
 func (m *Manager) Start(ctx context.Context) error {
-	info, prefix, err := m.network.Discover(ctx, m.cfg.IPv6Interface, m.cfg.IPv6Prefix)
-	if err != nil {
-		m.initErr = err
-		return err
-	}
 	state, err := m.store.Load()
 	if err != nil {
 		m.initErr = err
 		return err
 	}
+	interfaceOverride := state.IPv6Interface
+	if interfaceOverride == "" {
+		interfaceOverride = m.cfg.IPv6Interface
+	}
+	prefixOverride := state.IPv6Prefix
+	if prefixOverride == "" {
+		prefixOverride = m.cfg.IPv6Prefix
+	}
+	info, prefix, err := m.network.Discover(ctx, interfaceOverride, prefixOverride)
+	if err != nil {
+		m.initErr = err
+		return err
+	}
 	m.info, m.prefix, m.state = info, prefix, state
+	if err := m.ensureAuthState(); err != nil {
+		m.initErr = err
+		return err
+	}
+	if err := m.normalizeProxyIDs(); err != nil {
+		m.initErr = err
+		return err
+	}
 	if err := m.recoverPending(ctx); err != nil {
 		m.initErr = err
 		return err
@@ -67,7 +88,7 @@ func (m *Manager) Start(ctx context.Context) error {
 		return err
 	}
 	for len(m.snapshotProxies()) < m.cfg.InitialProxies {
-		if _, err := m.addBeforeXray(ctx, nil); err != nil {
+		if _, err := m.addBeforeXray(ctx, nil, "socks5", m.cfg.AdminUsername); err != nil {
 			m.initErr = err
 			return err
 		}
@@ -208,6 +229,17 @@ func (m *Manager) List() []Proxy {
 	return proxies
 }
 
+func (m *Manager) ListForUser(username string) []Proxy {
+	all := m.List()
+	result := make([]Proxy, 0, len(all))
+	for _, proxy := range all {
+		if proxy.Owner == username {
+			result = append(result, proxy)
+		}
+	}
+	return result
+}
+
 func (m *Manager) NetworkInfo() NetworkInfo { return m.info }
 func (m *Manager) Config() Config           { return m.cfg }
 func (m *Manager) Healthy() (bool, string) {
@@ -221,13 +253,23 @@ func (m *Manager) Healthy() (bool, string) {
 }
 
 func (m *Manager) Add(ctx context.Context, requestedPort *int) (Proxy, error) {
-	m.addMu.Lock()
-	defer m.addMu.Unlock()
-	return m.addRunning(ctx, requestedPort)
+	return m.AddWithProtocol(ctx, requestedPort, "socks5")
 }
 
-func (m *Manager) addBeforeXray(ctx context.Context, requestedPort *int) (Proxy, error) {
-	proxy, opID, cidr, err := m.prepareNew(ctx, requestedPort)
+func (m *Manager) AddWithProtocol(ctx context.Context, requestedPort *int, protocol string) (Proxy, error) {
+	return m.AddWithProtocolForUser(ctx, requestedPort, protocol, m.cfg.AdminUsername)
+}
+
+func (m *Manager) AddWithProtocolForUser(ctx context.Context, requestedPort *int, protocol, owner string) (Proxy, error) {
+	m.opMu.RLock()
+	defer m.opMu.RUnlock()
+	m.addMu.Lock()
+	defer m.addMu.Unlock()
+	return m.addRunning(ctx, requestedPort, protocol, owner)
+}
+
+func (m *Manager) addBeforeXray(ctx context.Context, requestedPort *int, protocol, owner string) (Proxy, error) {
+	proxy, opID, cidr, err := m.prepareNew(ctx, requestedPort, protocol, owner)
 	if err != nil {
 		return Proxy{}, err
 	}
@@ -243,8 +285,8 @@ func (m *Manager) addBeforeXray(ctx context.Context, requestedPort *int) (Proxy,
 	return proxy, nil
 }
 
-func (m *Manager) addRunning(ctx context.Context, requestedPort *int) (Proxy, error) {
-	proxy, opID, cidr, err := m.prepareNew(ctx, requestedPort)
+func (m *Manager) addRunning(ctx context.Context, requestedPort *int, protocol, owner string) (Proxy, error) {
+	proxy, opID, cidr, err := m.prepareNew(ctx, requestedPort, protocol, owner)
 	if err != nil {
 		return Proxy{}, err
 	}
@@ -265,11 +307,19 @@ func (m *Manager) addRunning(ctx context.Context, requestedPort *int) (Proxy, er
 	return proxy, nil
 }
 
-func (m *Manager) prepareNew(ctx context.Context, requestedPort *int) (Proxy, string, *net.IPNet, error) {
+func (m *Manager) prepareNew(ctx context.Context, requestedPort *int, protocol, owner string) (Proxy, string, *net.IPNet, error) {
 	m.stateMu.Lock()
 	defer m.stateMu.Unlock()
 	if len(m.state.Proxies) >= m.cfg.MaxProxies {
 		return Proxy{}, "", nil, ErrLimit
+	}
+	protocol, err := normalizeProtocol(protocol)
+	if err != nil {
+		return Proxy{}, "", nil, err
+	}
+	user, ok := m.userLocked(owner)
+	if !ok {
+		return Proxy{}, "", nil, ErrForbidden
 	}
 	port, err := m.allocatePortLocked(requestedPort)
 	if err != nil {
@@ -283,8 +333,8 @@ func (m *Manager) prepareNew(ctx context.Context, requestedPort *int) (Proxy, st
 	if err != nil {
 		return Proxy{}, "", nil, err
 	}
-	id, opID := randomID(), randomID()
-	proxy := Proxy{ID: id, Port: port, IPv6: ip.String(), Status: "creating", CreatedAt: time.Now().UTC()}
+	id, opID := strconv.Itoa(port), randomID()
+	proxy := Proxy{ID: id, Port: port, Protocol: protocol, IPv6: ip.String(), Status: "creating", CreatedAt: time.Now().UTC(), Owner: user.Username, Username: user.Username, Password: user.ProxyPassword}
 	cidr := &net.IPNet{IP: ip, Mask: m.prefix.Mask}
 	m.state.Pending[opID] = PendingOperation{ID: opID, ProxyID: id, Kind: "add", Candidate: ip.String(), CreatedAt: time.Now().UTC()}
 	if err := m.store.Save(m.state); err != nil {
@@ -325,6 +375,12 @@ func (m *Manager) abortPending(opID string, cidr *net.IPNet) {
 }
 
 func (m *Manager) Rotate(ctx context.Context, id string) (Proxy, error) {
+	m.opMu.RLock()
+	defer m.opMu.RUnlock()
+	return m.rotate(ctx, id)
+}
+
+func (m *Manager) rotate(ctx context.Context, id string) (Proxy, error) {
 	if _, loaded := m.busy.LoadOrStore(id, true); loaded {
 		return Proxy{}, ErrBusy
 	}
@@ -394,6 +450,8 @@ func (m *Manager) prepareRotation(ctx context.Context, proxy Proxy) (string, *ne
 }
 
 func (m *Manager) Delete(ctx context.Context, id string) error {
+	m.opMu.RLock()
+	defer m.opMu.RUnlock()
 	if _, loaded := m.busy.LoadOrStore(id, true); loaded {
 		return ErrBusy
 	}
@@ -428,8 +486,15 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 }
 
 func (m *Manager) RotateAll() *Job {
-	proxies := m.snapshotProxies()
-	job := &Job{ID: randomID(), Status: "running", Total: len(proxies), CreatedAt: time.Now().UTC(), Items: map[string]*JobItem{}}
+	return m.rotateAllFor(m.cfg.AdminUsername, m.snapshotProxies())
+}
+
+func (m *Manager) RotateAllForUser(username string) *Job {
+	return m.rotateAllFor(username, m.ListForUser(username))
+}
+
+func (m *Manager) rotateAllFor(owner string, proxies []Proxy) *Job {
+	job := &Job{ID: randomID(), Owner: owner, Status: "running", Total: len(proxies), CreatedAt: time.Now().UTC(), Items: map[string]*JobItem{}}
 	for _, proxy := range proxies {
 		job.Items[proxy.ID] = &JobItem{ProxyID: proxy.ID, Status: "pending", OldIPv6: proxy.IPv6}
 	}
@@ -438,6 +503,11 @@ func (m *Manager) RotateAll() *Job {
 	m.jobsMu.Unlock()
 	go m.runRotateAll(job.ID, proxies)
 	return cloneJob(job)
+}
+
+func (m *Manager) JobForUser(username, id string) (*Job, bool) {
+	job, ok := m.Job(id)
+	return job, ok && job.Owner == username
 }
 
 func (m *Manager) runRotateAll(jobID string, proxies []Proxy) {
@@ -535,6 +605,11 @@ func portAvailable(port int) bool {
 		return false
 	}
 	_ = listener.Close()
+	packet, err := net.ListenPacket("udp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		return false
+	}
+	_ = packet.Close()
 	return true
 }
 
@@ -598,4 +673,188 @@ func randomID() string {
 		return fmt.Sprintf("%d", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(data)
+}
+
+// UpdatePrefix validates a new prefix, moves every active SOCKS5 outbound to it,
+// and persists the selection. An empty value switches back to automatic discovery.
+func (m *Manager) UpdatePrefix(ctx context.Context, requested string) (NetworkInfo, error) {
+	return m.UpdateNetwork(ctx, m.info.Interface, requested)
+}
+
+// UpdateNetwork validates a new interface/prefix pair, moves every active
+// outbound to it, and persists the selection. Empty values enable discovery.
+func (m *Manager) UpdateNetwork(ctx context.Context, requestedInterface, requestedPrefix string) (NetworkInfo, error) {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+	m.addMu.Lock()
+	defer m.addMu.Unlock()
+
+	requestedInterface = strings.TrimSpace(requestedInterface)
+	requestedPrefix = strings.TrimSpace(requestedPrefix)
+	info, newPrefix, err := m.network.Discover(ctx, requestedInterface, requestedPrefix)
+	if err != nil {
+		return m.info, err
+	}
+	if m.info.Interface == info.Interface && m.prefix.String() == newPrefix.String() {
+		m.stateMu.Lock()
+		m.state.IPv6Interface = requestedInterface
+		m.state.IPv6Prefix = requestedPrefix
+		err = m.store.Save(m.state)
+		m.stateMu.Unlock()
+		if err == nil {
+			m.info = info
+			m.cfg.IPv6Interface = requestedInterface
+			m.cfg.IPv6Prefix = requestedPrefix
+		}
+		return m.info, err
+	}
+
+	proxies := m.snapshotProxies()
+	used := map[string]bool{}
+	addresses, err := m.network.ListAddresses(ctx, info.Interface)
+	if err != nil {
+		return m.info, err
+	}
+	for _, ip := range addresses {
+		used[ip.String()] = true
+	}
+	type replacement struct {
+		old  Proxy
+		new  Proxy
+		cidr *net.IPNet
+	}
+	replacements := make([]replacement, 0, len(proxies))
+	rollbackAddresses := func() {
+		for _, item := range replacements {
+			_ = m.network.DeleteAddress(context.Background(), info.Interface, item.cidr)
+		}
+	}
+	for _, proxy := range proxies {
+		ip, generateErr := randomIPv6(newPrefix, used)
+		if generateErr != nil {
+			rollbackAddresses()
+			return m.info, generateErr
+		}
+		used[ip.String()] = true
+		cidr := &net.IPNet{IP: ip, Mask: newPrefix.Mask}
+		if err = m.activateAddressFor(ctx, info.Interface, cidr); err != nil {
+			_ = m.network.DeleteAddress(context.Background(), info.Interface, cidr)
+			rollbackAddresses()
+			return m.info, err
+		}
+		updated := proxy
+		updated.IPv6 = ip.String()
+		updated.Status = "healthy"
+		updated.LastError = ""
+		updated.LastRotatedAt = time.Now().UTC()
+		replacements = append(replacements, replacement{old: proxy, new: updated, cidr: cidr})
+	}
+
+	replaced := 0
+	for i, item := range replacements {
+		if err = m.xray.ReplaceOutbound(ctx, item.old, item.old.IPv6, item.new.IPv6); err != nil {
+			for j := replaced - 1; j >= 0; j-- {
+				prior := replacements[j]
+				_ = m.xray.ReplaceOutbound(context.Background(), prior.new, prior.new.IPv6, prior.old.IPv6)
+			}
+			rollbackAddresses()
+			return m.info, fmt.Errorf("switch port %d to prefix %s: %w", replacements[i].old.Port, newPrefix, err)
+		}
+		replaced++
+	}
+
+	m.stateMu.Lock()
+	oldState := m.state
+	m.state.Proxies = make([]Proxy, len(replacements))
+	for i, item := range replacements {
+		m.state.Proxies[i] = item.new
+	}
+	m.state.IPv6Interface = requestedInterface
+	m.state.IPv6Prefix = requestedPrefix
+	err = m.store.Save(m.state)
+	if err != nil {
+		m.state = oldState
+	}
+	m.stateMu.Unlock()
+	if err != nil {
+		for i := len(replacements) - 1; i >= 0; i-- {
+			item := replacements[i]
+			_ = m.xray.ReplaceOutbound(context.Background(), item.new, item.new.IPv6, item.old.IPv6)
+		}
+		rollbackAddresses()
+		return m.info, err
+	}
+
+	oldPrefix := m.prefix
+	oldInfo := m.info
+	m.prefix, m.info = newPrefix, info
+	m.cfg.IPv6Interface, m.cfg.IPv6Prefix = requestedInterface, requestedPrefix
+	for _, item := range replacements {
+		oldIP := net.ParseIP(item.old.IPv6)
+		if oldIP != nil && oldPrefix.Contains(oldIP) {
+			_ = m.network.DeleteAddress(ctx, oldInfo.Interface, &net.IPNet{IP: oldIP, Mask: oldPrefix.Mask})
+		}
+	}
+	return m.info, nil
+}
+
+func (m *Manager) activateAddressFor(ctx context.Context, iface string, cidr *net.IPNet) error {
+	if err := m.network.AddAddress(ctx, iface, cidr); err != nil {
+		return err
+	}
+	if err := m.network.WaitReady(ctx, iface, cidr.IP, m.cfg.DADTimeout); err != nil {
+		return err
+	}
+	return m.network.CheckEgress(ctx, cidr.IP, m.cfg.IPCheckURL, m.cfg.IPCheckTimeout)
+}
+
+func (m *Manager) normalizeProxyIDs() error {
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+	changed := false
+	idMap := map[string]string{}
+	seen := map[string]bool{}
+	for i := range m.state.Proxies {
+		protocol, err := normalizeProtocol(m.state.Proxies[i].Protocol)
+		if err != nil {
+			return fmt.Errorf("proxy port %d: %w", m.state.Proxies[i].Port, err)
+		}
+		if m.state.Proxies[i].Protocol != protocol {
+			m.state.Proxies[i].Protocol = protocol
+			changed = true
+		}
+		newID := strconv.Itoa(m.state.Proxies[i].Port)
+		if seen[newID] {
+			return fmt.Errorf("duplicate proxy port %s in state", newID)
+		}
+		seen[newID] = true
+		oldID := m.state.Proxies[i].ID
+		idMap[oldID] = newID
+		if oldID != newID {
+			m.state.Proxies[i].ID = newID
+			changed = true
+		}
+	}
+	for id, op := range m.state.Pending {
+		if newID, ok := idMap[op.ProxyID]; ok && op.ProxyID != newID {
+			op.ProxyID = newID
+			m.state.Pending[id] = op
+			changed = true
+		}
+	}
+	if changed {
+		return m.store.Save(m.state)
+	}
+	return nil
+}
+
+func normalizeProtocol(protocol string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(protocol)) {
+	case "", "socks", "socks5", "sk5":
+		return "socks5", nil
+	case "hy2", "hysteria", "hysteria2":
+		return "hy2", nil
+	default:
+		return "", fmt.Errorf("unsupported inbound protocol %q", protocol)
+	}
 }

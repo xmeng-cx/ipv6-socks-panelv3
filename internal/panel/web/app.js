@@ -4,6 +4,7 @@ let toastTimer = null;
 
 async function api(path, options = {}) {
   const response = await fetch(path, {headers:{"Content-Type":"application/json"}, ...options});
+  if (response.status === 401) { location.href = "/login.html"; throw new Error("登录已过期"); }
   if (response.status === 204) return null;
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data?.error?.message || `请求失败 (${response.status})`);
@@ -26,12 +27,40 @@ function escapeText(value) {
 
 function connectionURI(proxy) {
   const host = system?.advertiseHost || location.hostname;
-  return `socks5://${encodeURIComponent(system.username)}:${encodeURIComponent(system.password)}@${host}:${proxy.port}`;
+  if (proxy.protocol === "hy2") {
+    const endpointHost = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+    const obfsPassword = system.hy2ObfsPassword;
+    const finalMask = {udp:[{type:"salamander",settings:{password:obfsPassword}}]};
+    const params = new URLSearchParams({security:"tls",fp:"chrome",alpn:"h3,h2,http/1.1",sni:host,insecure:"1",obfs:"salamander","obfs-password":obfsPassword,fm:JSON.stringify(finalMask)});
+    return `hysteria2://${encodeURIComponent(proxy.password)}@${endpointHost}:${proxy.port}?${params.toString()}#HY2-${proxy.port}`;
+  }
+  return `socks5://${encodeURIComponent(proxy.username)}:${encodeURIComponent(proxy.password)}@${host}:${proxy.port}`;
 }
 
 async function copyProxy(proxy) {
-  await navigator.clipboard.writeText(connectionURI(proxy));
+  await copyText(connectionURI(proxy));
   toast(`已复制端口 ${proxy.port} 的连接地址`);
+}
+
+async function copyText(value) {
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch (_) {}
+  }
+  const input = document.createElement("textarea");
+  input.value = value;
+  input.setAttribute("readonly", "");
+  input.style.position = "fixed";
+  input.style.opacity = "0";
+  document.body.appendChild(input);
+  input.focus();
+  input.select();
+  input.setSelectionRange(0, value.length);
+  const copied = document.execCommand("copy");
+  input.remove();
+  if (!copied) throw new Error("浏览器拒绝访问剪贴板，请手动复制");
 }
 
 function timeText(value) {
@@ -41,9 +70,10 @@ function timeText(value) {
 
 function renderRows(proxies) {
   const rows = $("proxyRows");
-  if (!proxies.length) { rows.innerHTML = '<tr><td colspan="5" class="empty">还没有线路，点击“新增 SOCKS5”开始。</td></tr>'; return; }
+  if (!proxies.length) { rows.innerHTML = '<tr><td colspan="6" class="empty">还没有线路，点击“新增线路”开始。</td></tr>'; return; }
   rows.innerHTML = proxies.map(p => `<tr>
     <td><span class="port">${p.port}</span></td>
+    <td><span class="muted">${p.protocol === "hy2" ? "Hysteria2" : "SOCKS5"}</span></td>
     <td><span class="ipv6">${escapeText(p.ipv6)}</span>${p.lastError ? `<div class="muted">${escapeText(p.lastError)}</div>` : ""}</td>
     <td><span class="status ${escapeText(p.status)}">${p.status === "healthy" ? "正常" : escapeText(p.status)}</span></td>
     <td class="muted">${timeText(p.lastRotatedAt)}</td>
@@ -83,9 +113,13 @@ async function refresh() {
     $("iface").textContent = health.network.interface;
     $("proxyCount").textContent = `${health.proxyCount} / ${health.maxProxies}`;
     $("username").textContent = health.username;
+    $("currentUser").textContent = `${health.username}${health.isAdmin ? " · 管理员" : ""}`;
+    $("editPrefixBtn").classList.toggle("hidden", !health.isAdmin);
+    $("userAdmin").classList.toggle("hidden", !health.isAdmin);
     $("rangeHint").textContent = `端口 ${health.basePort}–${health.basePort + health.maxProxies - 1} · TCP${health.udp ? " + UDP" : ""}`;
     const badge = $("healthBadge"); badge.className = "health ok"; badge.innerHTML = "<span></span>系统正常";
     renderRows(list.proxies);
+    if (health.isAdmin) await refreshUsers();
   } catch (error) {
     const badge = $("healthBadge"); badge.className = "health error"; badge.innerHTML = "<span></span>系统异常";
     toast(error.message, true);
@@ -96,11 +130,13 @@ async function createProxy(event) {
   event.preventDefault();
   if (event.submitter?.value === "cancel") { $("addDialog").close(); return; }
   const manual = $("manualPort").checked;
+  const protocol = $("protocolInput").value;
   const port = Number($("portInput").value);
   if (manual && (!Number.isInteger(port) || port < 1 || port > 65535)) { toast("请输入有效端口", true); return; }
   $("confirmAdd").disabled = true;
   try {
-    const proxy = await api("/api/v1/proxies", {method:"POST", body:JSON.stringify(manual ? {port} : {})});
+    const payload = manual ? {port, protocol} : {protocol};
+    const proxy = await api("/api/v1/proxies", {method:"POST", body:JSON.stringify(payload)});
     $("addDialog").close(); toast(`线路已创建：端口 ${proxy.port}`); await refresh();
   } catch (error) { toast(error.message, true); }
   finally { $("confirmAdd").disabled = false; }
@@ -116,6 +152,51 @@ async function rotateAll() {
   } catch (error) { toast(error.message, true); $("rotateAllBtn").disabled = false; }
 }
 
+async function refreshUsers() {
+  const result = await api("/api/v1/users");
+  $("userRows").innerHTML = result.users.map(user => `<tr><td><strong>${escapeText(user.username)}</strong></td><td>${user.role === "admin" ? "管理员" : "普通用户"}</td><td>${user.proxyCount}</td><td class="right">${user.role === "admin" ? "—" : `<button class="smallBtn danger" data-delete-user="${escapeText(user.username)}">删除</button>`}</td></tr>`).join("");
+  $("userRows").querySelectorAll("[data-delete-user]").forEach(button => button.addEventListener("click", () => deleteUser(button.dataset.deleteUser, button)));
+}
+
+async function createUser(event) {
+  event.preventDefault();
+  if (event.submitter?.value === "cancel") { $("userDialog").close(); return; }
+  const username = $("newUsername").value.trim(), password = $("newPassword").value;
+  $("confirmUser").disabled = true;
+  try {
+    await api("/api/v1/users", {method:"POST", body:JSON.stringify({username,password})});
+    $("userDialog").close(); toast(`用户 ${username} 已创建`); await refreshUsers();
+  } catch (error) { toast(error.message, true); }
+  finally { $("confirmUser").disabled = false; }
+}
+
+async function deleteUser(username, button) {
+  if (!confirm(`确认删除用户 ${username}？该用户的全部线路和 IPv6 将同时释放。`)) return;
+  button.disabled = true;
+  try { await api(`/api/v1/users/${encodeURIComponent(username)}`, {method:"DELETE"}); toast(`用户 ${username} 已删除`); await refreshUsers(); }
+  catch (error) { toast(error.message, true); button.disabled = false; }
+}
+
+async function logout() { await api("/api/v1/auth/logout", {method:"POST", body:"{}"}); location.href = "/login.html"; }
+
+async function updatePrefix(event) {
+  event.preventDefault();
+  if (event.submitter?.value === "cancel") { $("prefixDialog").close(); return; }
+  const prefix = $("prefixInput").value.trim();
+  const interfaceName = $("interfaceInput").value.trim();
+  const message = prefix || interfaceName ? `确认将全部线路切换到 ${interfaceName || "自动网卡"} / ${prefix || "自动前缀"}？` : "确认恢复自动识别 IPv6 网络？";
+  if (!confirm(message)) return;
+  $("confirmPrefix").disabled = true;
+  try {
+    toast("正在验证新前缀并迁移线路…");
+    const result = await api("/api/v1/network", {method:"PUT", body:JSON.stringify({interface:interfaceName, prefix})});
+    $("prefixDialog").close();
+    toast(`IPv6 前缀已更新为 ${result.network.prefix}`);
+    await refresh();
+  } catch (error) { toast(error.message, true); }
+  finally { $("confirmPrefix").disabled = false; }
+}
+
 async function pollJob(id) {
   try {
     const job = await api(`/api/v1/jobs/${id}`);
@@ -129,9 +210,14 @@ async function pollJob(id) {
   } catch (error) { toast(error.message, true); $("rotateAllBtn").disabled = false; }
 }
 
-$("addBtn").addEventListener("click", () => { $("manualPort").checked = false; $("portField").classList.add("hidden"); $("portInput").value = ""; $("addDialog").showModal(); });
+$("addBtn").addEventListener("click", () => { $("manualPort").checked = false; $("portField").classList.add("hidden"); $("portInput").value = ""; $("protocolInput").value = "socks5"; $("addDialog").showModal(); });
 $("manualPort").addEventListener("change", (event) => $("portField").classList.toggle("hidden", !event.target.checked));
 $("addForm").addEventListener("submit", createProxy);
+$("editPrefixBtn").addEventListener("click", () => { $("interfaceInput").value = system?.network?.interface || ""; $("prefixInput").value = system?.network?.prefix || ""; $("prefixDialog").showModal(); });
+$("prefixForm").addEventListener("submit", updatePrefix);
 $("rotateAllBtn").addEventListener("click", rotateAll);
+$("addUserBtn").addEventListener("click", () => { $("newUsername").value=""; $("newPassword").value=""; $("userDialog").showModal(); });
+$("userForm").addEventListener("submit", createUser);
+$("logoutBtn").addEventListener("click", logout);
 refresh();
 setInterval(refresh, 10000);

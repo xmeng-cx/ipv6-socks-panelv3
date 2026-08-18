@@ -40,6 +40,14 @@ func (x *XrayProcess) Start(ctx context.Context, proxies []Proxy, network Networ
 	if x.running.Load() {
 		return nil
 	}
+	for _, proxy := range proxies {
+		if proxy.Protocol == "hy2" {
+			if _, _, err := ensureHY2Certificate(x.cfg.DataDir, network, x.cfg.AdvertiseHost); err != nil {
+				return fmt.Errorf("prepare Hysteria2 certificate: %w", err)
+			}
+			break
+		}
+	}
 	configPath := filepath.Join(x.cfg.DataDir, "xray.json")
 	if err := writeJSONFile(configPath, xrayConfig(proxies, network, x.cfg)); err != nil {
 		return err
@@ -106,6 +114,11 @@ func (x *XrayProcess) Stop(ctx context.Context) error {
 }
 
 func (x *XrayProcess) AddProxy(ctx context.Context, proxy Proxy, network NetworkInfo) error {
+	if proxy.Protocol == "hy2" {
+		if _, _, err := ensureHY2Certificate(x.cfg.DataDir, network, x.cfg.AdvertiseHost); err != nil {
+			return fmt.Errorf("prepare Hysteria2 certificate: %w", err)
+		}
+	}
 	if err := x.apiConfig(ctx, "ado", map[string]any{"outbounds": []any{xrayOutbound(proxy.ID, proxy.IPv6)}}); err != nil {
 		return err
 	}
@@ -226,9 +239,30 @@ func xrayConfig(proxies []Proxy, network NetworkInfo, cfg Config) map[string]any
 }
 
 func xrayInbound(proxy Proxy, network NetworkInfo, cfg Config) map[string]any {
+	username, password := proxy.Username, proxy.Password
+	if username == "" {
+		username = cfg.SocksUsername
+	}
+	if password == "" {
+		password = cfg.SocksPassword
+	}
+	if proxy.Protocol == "hy2" {
+		certPath := filepath.Join(cfg.DataDir, "tls", "hy2.crt")
+		keyPath := filepath.Join(cfg.DataDir, "tls", "hy2.key")
+		return map[string]any{
+			"tag": inboundTag(proxy.ID), "listen": "0.0.0.0", "port": proxy.Port, "protocol": "hysteria",
+			"settings": map[string]any{"version": 2, "users": []any{map[string]any{"auth": password, "email": username}}},
+			"streamSettings": map[string]any{
+				"network": "hysteria", "security": "tls",
+				"tlsSettings":      map[string]any{"alpn": []string{"h3"}, "minVersion": "1.3", "maxVersion": "1.3", "certificates": []any{map[string]any{"certificateFile": certPath, "keyFile": keyPath}}},
+				"hysteriaSettings": map[string]any{"version": 2, "auth": password, "udpIdleTimeout": 60},
+				"finalmask":        map[string]any{"udp": []any{map[string]any{"type": "salamander", "settings": map[string]any{"password": cfg.HY2ObfsPassword}}}},
+			},
+		}
+	}
 	settings := map[string]any{
 		"auth": "password", "udp": cfg.SocksUDP,
-		"users": []any{map[string]any{"user": cfg.SocksUsername, "pass": cfg.SocksPassword}},
+		"users": []any{map[string]any{"user": username, "pass": password}},
 	}
 	udpIP := cfg.UDPAdvertiseIP
 	if udpIP == "" {

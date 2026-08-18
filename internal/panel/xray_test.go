@@ -21,3 +21,19 @@ func TestXrayConfigUsesStrictIPv6AndSharedCredentials(t *testing.T) {
 		}
 	}
 }
+
+func TestXrayConfigBuildsHysteria2Inbound(t *testing.T) {
+	// HY2 must remain reachable on every host interface even if SOCKS5 is restricted.
+	cfg := Config{DataDir: "/data", XrayAPI: "127.0.0.1:10085", SocksListen: "127.0.0.1", SocksUsername: "xmeng", SocksPassword: "5201314", HY2ObfsPassword: "obfs-secret"}
+	proxy := Proxy{ID: "20000", Port: 20000, Protocol: "hy2", IPv6: "2408:824e:cb01:3363::1234"}
+	data, err := json.Marshal(xrayConfig([]Proxy{proxy}, NetworkInfo{IPv4: "192.168.1.14"}, cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, expected := range []string{"hysteria", `"listen":"0.0.0.0"`, "hy2.crt", "hy2.key", "5201314", "h3", `"minVersion":"1.3"`, "finalmask", "salamander", "obfs-secret"} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("Hysteria2 config missing %q: %s", expected, text)
+		}
+	}
+}

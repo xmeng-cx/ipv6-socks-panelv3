@@ -32,7 +32,7 @@ func (s *StateStore) Load() (State, error) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		return state, fmt.Errorf("decode state: %w", err)
 	}
-	if state.Version != stateVersion {
+	if state.Version != 1 && state.Version != stateVersion {
 		return state, fmt.Errorf("unsupported state version %d", state.Version)
 	}
 	if state.Pending == nil {

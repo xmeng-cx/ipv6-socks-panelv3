@@ -2,6 +2,7 @@ package panel
 
 import (
 	"os"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -23,7 +24,7 @@ func TestStateStoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm()&0o077 != 0 {
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
 		t.Fatalf("state permissions are too broad: %o", info.Mode().Perm())
 	}
 }

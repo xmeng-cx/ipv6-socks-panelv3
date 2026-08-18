@@ -19,6 +19,9 @@ type Config struct {
 	SocksUDP         bool
 	UDPAdvertiseIP   string
 	AdvertiseHost    string
+	AdminUsername    string
+	AdminPassword    string
+	HY2ObfsPassword  string
 	InitialProxies   int
 	BasePort         int
 	MaxProxies       int
@@ -37,11 +40,14 @@ func LoadConfig() (Config, error) {
 		XrayBinary:       env("XRAY_BINARY", "/usr/local/bin/xray"),
 		XrayAPI:          env("XRAY_API", "127.0.0.1:10085"),
 		SocksListen:      env("SOCKS_LISTEN", "0.0.0.0"),
-		SocksUsername:    env("SOCKS_USERNAME", "userb"),
-		SocksPassword:    env("SOCKS_PASSWORD", "passwordb"),
+		SocksUsername:    env("SOCKS_USERNAME", "xmeng"),
+		SocksPassword:    env("SOCKS_PASSWORD", "5201314"),
 		SocksUDP:         envBool("SOCKS_UDP", true),
 		UDPAdvertiseIP:   strings.TrimSpace(os.Getenv("SOCKS_UDP_ADVERTISE_IP")),
 		AdvertiseHost:    strings.TrimSpace(os.Getenv("ADVERTISE_HOST")),
+		AdminUsername:    env("ADMIN_USERNAME", "xmeng"),
+		AdminPassword:    env("ADMIN_PASSWORD", "5201314"),
+		HY2ObfsPassword:  env("HY2_OBFS_PASSWORD", "5201314"),
 		InitialProxies:   envInt("INITIAL_PROXIES", 10),
 		BasePort:         envInt("BASE_PORT", 20000),
 		MaxProxies:       envInt("MAX_PROXIES", 100),
@@ -54,6 +60,12 @@ func LoadConfig() (Config, error) {
 	}
 	if c.SocksUsername == "" || c.SocksPassword == "" {
 		return c, fmt.Errorf("SOCKS_USERNAME and SOCKS_PASSWORD must not be empty")
+	}
+	if c.AdminUsername == "" || c.AdminPassword == "" {
+		return c, fmt.Errorf("ADMIN_USERNAME and ADMIN_PASSWORD must not be empty")
+	}
+	if c.HY2ObfsPassword == "" {
+		return c, fmt.Errorf("HY2_OBFS_PASSWORD must not be empty")
 	}
 	if c.InitialProxies < 0 || c.InitialProxies > c.MaxProxies {
 		return c, fmt.Errorf("INITIAL_PROXIES must be between 0 and MAX_PROXIES")

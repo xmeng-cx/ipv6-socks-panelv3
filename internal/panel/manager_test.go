@@ -3,6 +3,7 @@ package panel
 import (
 	"context"
 	"net"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -18,8 +19,20 @@ func newFakeNetwork() *fakeNetwork {
 	_, prefix, _ := net.ParseCIDR("2408:824e:cb01:3363::/64")
 	return &fakeNetwork{prefix: prefix, addresses: map[string]bool{}}
 }
-func (f *fakeNetwork) Discover(context.Context, string, string) (NetworkInfo, *net.IPNet, error) {
-	return NetworkInfo{Interface: "eth0", Prefix: f.prefix.String(), IPv4: "192.168.10.168"}, f.prefix, nil
+func (f *fakeNetwork) Discover(_ context.Context, interfaceOverride string, prefixOverride string) (NetworkInfo, *net.IPNet, error) {
+	prefix := f.prefix
+	if prefixOverride != "" {
+		ip, parsed, err := net.ParseCIDR(prefixOverride)
+		if err != nil || ip.To4() != nil {
+			return NetworkInfo{}, nil, err
+		}
+		parsed.IP = ip.Mask(parsed.Mask)
+		prefix = parsed
+	}
+	if interfaceOverride == "" {
+		interfaceOverride = "eth0"
+	}
+	return NetworkInfo{Interface: interfaceOverride, Prefix: prefix.String(), IPv4: "192.168.10.168"}, prefix, nil
 }
 func (f *fakeNetwork) ListAddresses(context.Context, string) ([]net.IP, error) {
 	f.mu.Lock()
@@ -80,7 +93,7 @@ func testConfig(t *testing.T) Config {
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 	_ = listener.Close()
-	return Config{DataDir: t.TempDir(), InitialProxies: 0, BasePort: port, MaxProxies: 3, SocksUsername: "u", SocksPassword: "p", SocksUDP: true, IPCheckTimeout: time.Second, DADTimeout: time.Second, RotateAllWorkers: 2}
+	return Config{DataDir: t.TempDir(), InitialProxies: 0, BasePort: port, MaxProxies: 3, SocksUsername: "u", SocksPassword: "secret1", AdminUsername: "xmeng", AdminPassword: "5201314", SocksUDP: true, IPCheckTimeout: time.Second, DADTimeout: time.Second, RotateAllWorkers: 2}
 }
 
 func TestManagerAddRotateDeleteLifecycle(t *testing.T) {
@@ -95,6 +108,9 @@ func TestManagerAddRotateDeleteLifecycle(t *testing.T) {
 	proxy, err := manager.Add(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if proxy.ID != strconv.Itoa(proxy.Port) {
+		t.Fatalf("proxy ID must equal its port: %#v", proxy)
 	}
 	oldIP := proxy.IPv6
 	rotated, err := manager.Rotate(ctx, proxy.ID)
@@ -150,10 +166,84 @@ func TestManagerMigratesAddressesWhenPrefixChanges(t *testing.T) {
 	if len(proxies) != 1 {
 		t.Fatalf("expected one migrated proxy, got %d", len(proxies))
 	}
-	if proxies[0].ID != old.ID || proxies[0].Port != old.Port {
-		t.Fatalf("migration changed stable identity: %#v", proxies[0])
+	if proxies[0].ID != strconv.Itoa(old.Port) || proxies[0].Port != old.Port {
+		t.Fatalf("migration did not normalize ID to port: %#v", proxies[0])
 	}
 	if !network.prefix.Contains(net.ParseIP(proxies[0].IPv6)) {
 		t.Fatalf("migrated IPv6 %s is outside %s", proxies[0].IPv6, network.prefix)
+	}
+}
+
+func TestManagerUpdatesAndPersistsPrefix(t *testing.T) {
+	cfg := testConfig(t)
+	network := newFakeNetwork()
+	manager := NewManager(cfg, network, &fakeXray{})
+	ctx := context.Background()
+	if err := manager.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	proxy, err := manager.Add(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldIP := proxy.IPv6
+	info, err := manager.UpdatePrefix(ctx, "2408:824e:cb01:7777::/64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Prefix != "2408:824e:cb01:7777::/64" {
+		t.Fatalf("unexpected prefix: %s", info.Prefix)
+	}
+	updated := manager.List()[0]
+	if updated.ID != strconv.Itoa(updated.Port) || updated.IPv6 == oldIP {
+		t.Fatalf("proxy was not migrated correctly: %#v", updated)
+	}
+	_, expectedPrefix, _ := net.ParseCIDR(info.Prefix)
+	if !expectedPrefix.Contains(net.ParseIP(updated.IPv6)) {
+		t.Fatalf("updated IPv6 %s is outside %s", updated.IPv6, expectedPrefix)
+	}
+	state, err := NewStateStore(cfg.DataDir).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.IPv6Prefix != info.Prefix {
+		t.Fatalf("prefix was not persisted: %#v", state)
+	}
+}
+
+func TestManagerAddsHysteria2WithPortID(t *testing.T) {
+	cfg := testConfig(t)
+	manager := NewManager(cfg, newFakeNetwork(), &fakeXray{})
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	proxy, err := manager.AddWithProtocol(context.Background(), nil, "hy2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proxy.Protocol != "hy2" || proxy.ID != strconv.Itoa(proxy.Port) {
+		t.Fatalf("unexpected Hysteria2 proxy: %#v", proxy)
+	}
+}
+
+func TestManagerUpdatesAndPersistsInterface(t *testing.T) {
+	cfg := testConfig(t)
+	manager := NewManager(cfg, newFakeNetwork(), &fakeXray{})
+	if err := manager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	info, err := manager.UpdateNetwork(context.Background(), "eth1", "2408:824e:cb01:7777::/64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Interface != "eth1" {
+		t.Fatalf("unexpected interface: %s", info.Interface)
+	}
+	state, err := NewStateStore(cfg.DataDir).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.IPv6Interface != "eth1" {
+		t.Fatalf("interface was not persisted: %#v", state)
 	}
 }

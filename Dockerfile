@@ -24,5 +24,5 @@ ENV DATA_DIR=/data \
     TZ=Asia/Shanghai
 VOLUME ["/data"]
 HEALTHCHECK --interval=20s --timeout=3s --start-period=60s --retries=3 \
-  CMD wget -q -O /dev/null http://127.0.0.1:8080/api/v1/health || exit 1
+  CMD wget -q -O /dev/null "http://127.0.0.1:8080/healthz" || exit 1
 ENTRYPOINT ["/usr/local/bin/ipv6-socks-panel"]

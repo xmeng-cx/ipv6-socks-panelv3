@@ -2,16 +2,36 @@ package panel
 
 import "time"
 
-const stateVersion = 1
+const stateVersion = 2
 
 type Proxy struct {
 	ID            string    `json:"id"`
 	Port          int       `json:"port"`
+	Protocol      string    `json:"protocol"`
 	IPv6          string    `json:"ipv6"`
 	Status        string    `json:"status"`
 	LastError     string    `json:"lastError,omitempty"`
 	CreatedAt     time.Time `json:"createdAt"`
 	LastRotatedAt time.Time `json:"lastRotatedAt,omitempty"`
+	Owner         string    `json:"owner"`
+	Username      string    `json:"username"`
+	Password      string    `json:"password"`
+}
+
+type User struct {
+	Username      string    `json:"username"`
+	Role          string    `json:"role"`
+	PasswordSalt  string    `json:"passwordSalt"`
+	PasswordHash  string    `json:"passwordHash"`
+	ProxyPassword string    `json:"proxyPassword"`
+	CreatedAt     time.Time `json:"createdAt"`
+}
+
+type UserView struct {
+	Username   string    `json:"username"`
+	Role       string    `json:"role"`
+	ProxyCount int       `json:"proxyCount"`
+	CreatedAt  time.Time `json:"createdAt"`
 }
 
 type PendingOperation struct {
@@ -23,9 +43,13 @@ type PendingOperation struct {
 }
 
 type State struct {
-	Version int                         `json:"version"`
-	Proxies []Proxy                     `json:"proxies"`
-	Pending map[string]PendingOperation `json:"pending,omitempty"`
+	Version       int                         `json:"version"`
+	Proxies       []Proxy                     `json:"proxies"`
+	Pending       map[string]PendingOperation `json:"pending,omitempty"`
+	IPv6Prefix    string                      `json:"ipv6Prefix,omitempty"`
+	IPv6Interface string                      `json:"ipv6Interface,omitempty"`
+	Users         []User                      `json:"users,omitempty"`
+	SessionSecret string                      `json:"sessionSecret,omitempty"`
 }
 
 type NetworkInfo struct {
@@ -52,4 +76,5 @@ type Job struct {
 	CreatedAt   time.Time           `json:"createdAt"`
 	CompletedAt time.Time           `json:"completedAt,omitempty"`
 	Items       map[string]*JobItem `json:"items"`
+	Owner       string              `json:"-"`
 }
