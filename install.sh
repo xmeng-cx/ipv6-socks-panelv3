@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-PANEL_REPOSITORY="${PANEL_REPOSITORY:-https://github.com/xmeng-cx/ipv6-socks-panelv2.git}"
-PANEL_INSTALL_DIR="${PANEL_INSTALL_DIR:-/opt/ipv6-socks-panelv2}"
+PANEL_REPOSITORY="${PANEL_REPOSITORY:-https://github.com/xmeng-cx/ipv6-socks-panelv3.git}"
+PANEL_INSTALL_DIR="${PANEL_INSTALL_DIR:-/opt/ipv6-socks-panelv3}"
 
 if ! command -v git >/dev/null 2>&1; then
   echo "错误：未安装 git。" >&2

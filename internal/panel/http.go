@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -27,6 +28,7 @@ func NewHTTPHandler(manager *Manager) http.Handler {
 	mux.HandleFunc("GET /healthz", s.healthz)
 	mux.HandleFunc("POST /api/v1/auth/login", s.login)
 	mux.HandleFunc("POST /api/v1/auth/logout", s.logout)
+	mux.HandleFunc("GET /sub/{token}", s.subscription)
 	mux.HandleFunc("GET /api/v1/auth/me", s.me)
 	mux.HandleFunc("GET /api/v1/health", s.health)
 	mux.HandleFunc("GET /api/v1/proxies", s.listProxies)
@@ -34,6 +36,7 @@ func NewHTTPHandler(manager *Manager) http.Handler {
 	mux.HandleFunc("POST /api/v1/proxies/rotate-all", s.rotateAll)
 	mux.HandleFunc("PUT /api/v1/network", s.updateNetwork)
 	mux.HandleFunc("PUT /api/v1/network/prefix", s.updatePrefix)
+	mux.HandleFunc("PUT /api/v1/subscription/settings", s.updateSubscriptionSettings)
 	mux.HandleFunc("GET /api/v1/jobs/{id}", s.getJob)
 	mux.HandleFunc("DELETE /api/v1/proxies/{id}", s.deleteProxy)
 	mux.HandleFunc("POST /api/v1/proxies/{id}/rotate", s.rotateProxy)
@@ -52,7 +55,7 @@ func currentIdentity(r *http.Request) identity {
 
 func (s *HTTPServer) sessionAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		public := r.URL.Path == "/healthz" || r.URL.Path == "/api/v1/auth/login" || r.URL.Path == "/login.html" || r.URL.Path == "/login.js" || strings.HasSuffix(r.URL.Path, ".css")
+		public := r.URL.Path == "/healthz" || r.URL.Path == "/api/v1/auth/login" || strings.HasPrefix(r.URL.Path, "/sub/") || r.URL.Path == "/login.html" || r.URL.Path == "/login.js" || strings.HasSuffix(r.URL.Path, ".css")
 		if public {
 			if r.URL.Path == "/login.html" {
 				if _, ok := s.sessionUser(r); ok {
@@ -126,8 +129,26 @@ func (s *HTTPServer) me(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, currentIdentity(r))
 }
 
+func (s *HTTPServer) subscription(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.manager.UserBySubscriptionToken(r.PathValue("token"))
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	host := s.manager.Config().AdvertiseHost
+	if host == "" {
+		host = requestHostname(r)
+	}
+	config := GenerateMihomoConfig(s.manager.ListForUser(user.Username), host, s.manager.Config().HY2ObfsPassword, s.manager.DirectRules())
+	w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
+	w.Header().Set("Content-Disposition", "inline; filename=\"mihomo-"+user.Username+".yaml\"")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write([]byte(config))
+}
+
 func (s *HTTPServer) health(w http.ResponseWriter, r *http.Request) {
 	user := currentIdentity(r)
+	storedUser, _ := s.manager.User(user.Username)
 	healthy, message := s.manager.Healthy()
 	cfg := s.manager.Config()
 	proxies := s.manager.ListForUser(user.Username)
@@ -135,12 +156,18 @@ func (s *HTTPServer) health(w http.ResponseWriter, r *http.Request) {
 	if !healthy {
 		status = http.StatusServiceUnavailable
 	}
-	writeJSON(w, status, map[string]any{
+	result := map[string]any{
 		"status": map[bool]string{true: "healthy", false: "unhealthy"}[healthy], "message": message, "xrayRunning": s.manager.xray.Running(),
-		"network": s.manager.NetworkInfo(), "proxyCount": len(proxies), "totalProxyCount": len(s.manager.List()), "initialProxies": cfg.InitialProxies,
+		"proxyCount": len(proxies), "initialProxies": cfg.InitialProxies,
 		"maxProxies": cfg.MaxProxies, "basePort": cfg.BasePort, "username": user.Username, "role": user.Role, "isAdmin": user.Role == "admin",
-		"advertiseHost": cfg.AdvertiseHost, "udp": cfg.SocksUDP, "hy2ObfsPassword": cfg.HY2ObfsPassword,
-	})
+		"advertiseHost": cfg.AdvertiseHost, "udp": cfg.SocksUDP, "hy2ObfsPassword": cfg.HY2ObfsPassword, "subscriptionUrl": subscriptionURL(r, storedUser.SubscriptionToken),
+	}
+	if user.Role == "admin" {
+		result["network"] = s.manager.NetworkInfo()
+		result["totalProxyCount"] = len(s.manager.List())
+		result["directRules"] = s.manager.DirectRules()
+	}
+	writeJSON(w, status, result)
 }
 
 func (s *HTTPServer) listProxies(w http.ResponseWriter, r *http.Request) {
@@ -148,20 +175,39 @@ func (s *HTTPServer) listProxies(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *HTTPServer) addProxy(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	var request struct {
 		Port     *int   `json:"port"`
 		Protocol string `json:"protocol"`
+		Owner    string `json:"owner"`
+		Count    int    `json:"count"`
 	}
 	if err := decodeJSON(r, &request); err != nil {
 		writeAPIError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 		return
 	}
-	proxy, err := s.manager.AddWithProtocolForUser(r.Context(), request.Port, request.Protocol, currentIdentity(r).Username)
+	if request.Owner == "" {
+		request.Owner = currentIdentity(r).Username
+	}
+	if request.Count == 0 {
+		request.Count = 1
+	}
+	if request.Count < 1 || request.Count > s.manager.Config().MaxProxies {
+		writeAPIError(w, http.StatusBadRequest, "invalid_count", "线路数量超出允许范围", nil)
+		return
+	}
+	if request.Count > 1 && request.Port != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_port", "批量创建线路时不能手动指定端口", nil)
+		return
+	}
+	proxies, err := s.manager.CreateProxiesForUser(r.Context(), request.Owner, request.Protocol, request.Count, request.Port)
 	if err != nil {
 		s.managerError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, proxy)
+	writeJSON(w, http.StatusCreated, map[string]any{"proxies": proxies, "count": len(proxies), "owner": request.Owner})
 }
 
 func (s *HTTPServer) deleteProxy(w http.ResponseWriter, r *http.Request) {
@@ -237,11 +283,35 @@ func (s *HTTPServer) updateNetwork(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"network": info})
 }
 
+func (s *HTTPServer) updateSubscriptionSettings(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	var request struct {
+		DirectRules []string `json:"directRules"`
+	}
+	if err := decodeJSON(r, &request); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
+		return
+	}
+	rules, err := s.manager.UpdateDirectRules(request.DirectRules)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid_direct_rule", err.Error(), nil)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"directRules": rules})
+}
+
 func (s *HTTPServer) listUsers(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"users": s.manager.Users()})
+	views := s.manager.Users()
+	users := make([]map[string]any, 0, len(views))
+	for _, user := range views {
+		users = append(users, userResponse(r, user))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"users": users})
 }
 func (s *HTTPServer) addUser(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
@@ -255,13 +325,33 @@ func (s *HTTPServer) addUser(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "invalid_request", err.Error(), nil)
 		return
 	}
-	user, err := s.manager.AddUser(request.Username, request.Password)
+	user, err := s.manager.CreateUserWithDefaultProxies(r.Context(), request.Username, request.Password, 10)
 	if err != nil {
 		s.managerError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, user)
+	writeJSON(w, http.StatusCreated, userResponse(r, user))
 }
+
+func userResponse(r *http.Request, user UserView) map[string]any {
+	return map[string]any{"username": user.Username, "role": user.Role, "proxyCount": user.ProxyCount, "createdAt": user.CreatedAt, "subscriptionUrl": subscriptionURL(r, user.SubscriptionToken)}
+}
+
+func subscriptionURL(r *http.Request, token string) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host + "/sub/" + token
+}
+
+func requestHostname(r *http.Request) string {
+	if host, _, err := net.SplitHostPort(r.Host); err == nil {
+		return strings.Trim(host, "[]")
+	}
+	return strings.Trim(r.Host, "[]")
+}
+
 func (s *HTTPServer) deleteUser(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
 		return

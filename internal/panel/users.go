@@ -29,6 +29,16 @@ func (m *Manager) ensureAuthState() error {
 		m.state.Users = []User{admin}
 		changed = true
 	}
+	for i := range m.state.Users {
+		if m.state.Users[i].SubscriptionToken == "" {
+			token, err := randomSecret()
+			if err != nil {
+				return err
+			}
+			m.state.Users[i].SubscriptionToken = token
+			changed = true
+		}
+	}
 	admin, ok := m.userLocked(m.cfg.AdminUsername)
 	if !ok {
 		return fmt.Errorf("configured administrator %q is missing", m.cfg.AdminUsername)
@@ -72,6 +82,17 @@ func (m *Manager) User(username string) (User, bool) {
 	return m.userLocked(username)
 }
 
+func (m *Manager) UserBySubscriptionToken(token string) (User, bool) {
+	m.stateMu.RLock()
+	defer m.stateMu.RUnlock()
+	for _, user := range m.state.Users {
+		if subtle.ConstantTimeCompare([]byte(user.SubscriptionToken), []byte(token)) == 1 {
+			return user, true
+		}
+	}
+	return User{}, false
+}
+
 func (m *Manager) Authenticate(username, password string) (User, bool) {
 	m.stateMu.RLock()
 	user, ok := m.userLocked(strings.TrimSpace(username))
@@ -94,7 +115,7 @@ func (m *Manager) Users() []UserView {
 	}
 	result := make([]UserView, 0, len(m.state.Users))
 	for _, user := range m.state.Users {
-		result = append(result, UserView{Username: user.Username, Role: user.Role, ProxyCount: counts[user.Username], CreatedAt: user.CreatedAt})
+		result = append(result, UserView{Username: user.Username, Role: user.Role, ProxyCount: counts[user.Username], CreatedAt: user.CreatedAt, SubscriptionToken: user.SubscriptionToken})
 	}
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].Role != result[j].Role {
@@ -120,7 +141,51 @@ func (m *Manager) AddUser(username, password string) (UserView, error) {
 		m.state.Users = m.state.Users[:len(m.state.Users)-1]
 		return UserView{}, err
 	}
-	return UserView{Username: user.Username, Role: user.Role, CreatedAt: user.CreatedAt}, nil
+	return UserView{Username: user.Username, Role: user.Role, CreatedAt: user.CreatedAt, SubscriptionToken: user.SubscriptionToken}, nil
+}
+
+func (m *Manager) CreateUserWithDefaultProxies(ctx context.Context, username, password string, count int) (UserView, error) {
+	view, err := m.AddUser(username, password)
+	if err != nil {
+		return UserView{}, err
+	}
+	if _, err := m.CreateProxiesForUser(ctx, view.Username, "hy2", count, nil); err != nil {
+		rollbackErr := m.DeleteUser(context.Background(), view.Username)
+		if rollbackErr != nil {
+			return UserView{}, fmt.Errorf("create default HY2 lines: %w (rollback: %v)", err, rollbackErr)
+		}
+		return UserView{}, fmt.Errorf("create default HY2 lines: %w", err)
+	}
+	view.ProxyCount = count
+	return view, nil
+}
+
+func (m *Manager) CreateProxiesForUser(ctx context.Context, username, protocol string, count int, requestedPort *int) ([]Proxy, error) {
+	if count < 1 || count > m.cfg.MaxProxies {
+		return nil, fmt.Errorf("线路数量必须为 1–%d", m.cfg.MaxProxies)
+	}
+	if count > 1 && requestedPort != nil {
+		return nil, fmt.Errorf("批量创建线路时不能手动指定端口")
+	}
+	created := make([]Proxy, 0, count)
+	for i := 0; i < count; i++ {
+		proxy, err := m.AddWithProtocolForUser(ctx, requestedPort, protocol, username)
+		if err == nil {
+			created = append(created, proxy)
+			continue
+		}
+		var rollbackErrors []string
+		for _, item := range created {
+			if rollbackErr := m.Delete(context.Background(), item.ID); rollbackErr != nil {
+				rollbackErrors = append(rollbackErrors, rollbackErr.Error())
+			}
+		}
+		if len(rollbackErrors) > 0 {
+			return nil, fmt.Errorf("create lines: %w (rollback: %s)", err, strings.Join(rollbackErrors, "; "))
+		}
+		return nil, fmt.Errorf("create lines: %w", err)
+	}
+	return created, nil
 }
 
 func (m *Manager) DeleteUser(ctx context.Context, username string) error {

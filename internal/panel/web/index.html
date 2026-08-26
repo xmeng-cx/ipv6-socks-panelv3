@@ -19,8 +19,8 @@
     </header>
 
     <section class="metrics" aria-label="系统状态">
-      <article class="prefixMetric"><span>公网前缀</span><strong id="prefix">—</strong><button id="editPrefixBtn" class="metricEdit">网络设置</button></article>
-      <article><span>宿主网卡</span><strong id="iface">—</strong></article>
+      <article id="networkPrefixMetric" class="prefixMetric"><span>公网前缀</span><strong id="prefix">—</strong><button id="editPrefixBtn" class="metricEdit">网络设置</button></article>
+      <article id="networkInterfaceMetric"><span>宿主网卡</span><strong id="iface">—</strong></article>
       <article><span>活跃线路</span><strong id="proxyCount">—</strong></article>
       <article><span>共用账号</span><strong id="username">—</strong></article>
     </section>
@@ -48,12 +48,17 @@
       </table>
     </section>
 
+    <section class="subscriptionPanel">
+      <div><p class="eyebrow">MIHOMO SUBSCRIPTION</p><h2>Mihomo 订阅</h2><p>配置默认使用全局代理，复制链接后可直接添加到 Mihomo。</p></div>
+      <div class="subscriptionCopy"><input id="subscriptionUrl" type="text" readonly aria-label="Mihomo 订阅链接"><button id="copySubscriptionBtn" class="button secondary">复制订阅链接</button></div>
+    </section>
+
     <section id="userAdmin" class="adminPanel hidden">
       <div class="toolbar">
         <div><p class="eyebrow">ACCESS CONTROL</p><h2>用户管理</h2><p>普通用户只能查看和操作自己的线路。</p></div>
-        <button id="addUserBtn" class="button secondary">＋ 添加用户</button>
+        <div class="actions"><button id="directSettingsBtn" class="button secondary">直连设置</button><button id="addUserBtn" class="button secondary">＋ 添加用户</button></div>
       </div>
-      <div class="tableWrap compact"><table><thead><tr><th>用户名</th><th>角色</th><th>线路数</th><th class="right">操作</th></tr></thead><tbody id="userRows"></tbody></table></div>
+      <div class="tableWrap compact"><table><thead><tr><th>用户名</th><th>角色</th><th>线路数</th><th>订阅</th><th class="right">操作</th></tr></thead><tbody id="userRows"></tbody></table></div>
     </section>
 
     <p class="warning">管理页采用长期登录会话。每个用户拥有独立线路和代理凭据；SOCKS5 流量本身不加密，请通过防火墙限制访问来源。</p>
@@ -62,10 +67,12 @@
   <dialog id="addDialog">
     <form method="dialog" id="addForm">
       <div class="dialogHead"><div><p class="eyebrow">NEW ROUTE</p><h3>新增入站线路</h3></div><button value="cancel" class="iconBtn" aria-label="关闭">×</button></div>
-      <label class="field protocolField"><span>入站协议</span><select id="protocolInput"><option value="socks5">SOCKS5</option><option value="hy2">Hysteria2</option></select></label>
+      <label class="field protocolField"><span>分配给账号</span><select id="proxyOwnerInput"></select></label>
+      <label class="field protocolField"><span>入站协议</span><select id="protocolInput"><option value="hy2">Hysteria2</option><option value="socks5">SOCKS5</option></select></label>
+      <label class="field protocolField"><span>创建数量</span><input id="proxyCountInput" type="number" min="1" max="100" value="1" inputmode="numeric" required></label>
       <label class="check"><input id="manualPort" type="checkbox"><span>手动指定端口</span></label>
       <label id="portField" class="field hidden"><span>端口</span><input id="portInput" type="number" min="1" max="65535" inputmode="numeric"></label>
-      <p class="dialogNote">创建时会自动生成、绑定并验证新的公网 IPv6。</p>
+      <p class="dialogNote">管理员可以为指定账号批量创建线路。数量大于 1 时端口自动分配，每条线路都会生成并验证独立的公网 IPv6。</p>
       <div class="dialogActions"><button value="cancel" class="button ghost">取消</button><button id="confirmAdd" value="default" class="button primary">创建线路</button></div>
     </form>
   </dialog>
@@ -75,7 +82,7 @@
       <div class="dialogHead"><div><p class="eyebrow">NEW USER</p><h3>添加普通用户</h3></div><button value="cancel" class="iconBtn" aria-label="关闭">×</button></div>
       <label class="field prefixField"><span>用户名</span><input id="newUsername" type="text" minlength="3" maxlength="32" pattern="[A-Za-z0-9._-]+" autocomplete="off" required></label>
       <label class="field networkField"><span>密码</span><input id="newPassword" type="password" minlength="6" maxlength="128" autocomplete="new-password" required></label>
-      <p class="dialogNote">该账号同时作为其新建 SOCKS5/HY2 线路的认证凭据。用户之间不能查看或操作对方线路。</p>
+      <p class="dialogNote">创建账号时会自动建立 10 条 Hysteria2 线路，并生成独立的 Mihomo 订阅链接。用户之间不能查看或操作对方线路。</p>
       <div class="dialogActions"><button value="cancel" class="button ghost">取消</button><button id="confirmUser" value="default" class="button primary">创建用户</button></div>
     </form>
   </dialog>
@@ -87,6 +94,15 @@
       <label class="field networkField"><span>IPv6 前缀</span><input id="prefixInput" type="text" spellcheck="false" placeholder="例如 2408:1234:5678:9abc::/64"></label>
       <p class="dialogNote">保存后会为所有线路生成新 IPv6，验证通过后切换。网卡和前缀都留空可恢复自动识别。</p>
       <div class="dialogActions"><button value="cancel" class="button ghost">取消</button><button id="confirmPrefix" value="default" class="button primary">保存并切换</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="directDialog">
+    <form method="dialog" id="directForm">
+      <div class="dialogHead"><div><p class="eyebrow">DIRECT RULES</p><h3>直连设置</h3></div><button value="cancel" class="iconBtn" aria-label="关闭">×</button></div>
+      <label class="field"><span>需要直连的域名、IP 或 CIDR（每行一项）</span><textarea id="directRulesInput" rows="10" spellcheck="false" placeholder="example.com&#10;1.1.1.1&#10;192.168.50.0/24"></textarea></label>
+      <p class="dialogNote">保存后应用到所有账号的 Mihomo 订阅配置。域名会同时匹配其子域名。</p>
+      <div class="dialogActions"><button value="cancel" class="button ghost">取消</button><button id="confirmDirect" value="default" class="button primary">保存设置</button></div>
     </form>
   </dialog>
 

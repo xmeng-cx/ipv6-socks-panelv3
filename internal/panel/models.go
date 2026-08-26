@@ -2,7 +2,7 @@ package panel
 
 import "time"
 
-const stateVersion = 2
+const stateVersion = 3
 
 type Proxy struct {
 	ID            string    `json:"id"`
@@ -19,19 +19,21 @@ type Proxy struct {
 }
 
 type User struct {
-	Username      string    `json:"username"`
-	Role          string    `json:"role"`
-	PasswordSalt  string    `json:"passwordSalt"`
-	PasswordHash  string    `json:"passwordHash"`
-	ProxyPassword string    `json:"proxyPassword"`
-	CreatedAt     time.Time `json:"createdAt"`
+	Username          string    `json:"username"`
+	Role              string    `json:"role"`
+	PasswordSalt      string    `json:"passwordSalt"`
+	PasswordHash      string    `json:"passwordHash"`
+	ProxyPassword     string    `json:"proxyPassword"`
+	SubscriptionToken string    `json:"subscriptionToken"`
+	CreatedAt         time.Time `json:"createdAt"`
 }
 
 type UserView struct {
-	Username   string    `json:"username"`
-	Role       string    `json:"role"`
-	ProxyCount int       `json:"proxyCount"`
-	CreatedAt  time.Time `json:"createdAt"`
+	Username          string    `json:"username"`
+	Role              string    `json:"role"`
+	ProxyCount        int       `json:"proxyCount"`
+	CreatedAt         time.Time `json:"createdAt"`
+	SubscriptionToken string    `json:"-"`
 }
 
 type PendingOperation struct {
@@ -50,6 +52,7 @@ type State struct {
 	IPv6Interface string                      `json:"ipv6Interface,omitempty"`
 	Users         []User                      `json:"users,omitempty"`
 	SessionSecret string                      `json:"sessionSecret,omitempty"`
+	DirectRules   []string                    `json:"directRules,omitempty"`
 }
 
 type NetworkInfo struct {

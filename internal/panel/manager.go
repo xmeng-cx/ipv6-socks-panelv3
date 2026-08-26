@@ -88,7 +88,7 @@ func (m *Manager) Start(ctx context.Context) error {
 		return err
 	}
 	for len(m.snapshotProxies()) < m.cfg.InitialProxies {
-		if _, err := m.addBeforeXray(ctx, nil, "socks5", m.cfg.AdminUsername); err != nil {
+		if _, err := m.addBeforeXray(ctx, nil, "hy2", m.cfg.AdminUsername); err != nil {
 			m.initErr = err
 			return err
 		}
@@ -253,7 +253,7 @@ func (m *Manager) Healthy() (bool, string) {
 }
 
 func (m *Manager) Add(ctx context.Context, requestedPort *int) (Proxy, error) {
-	return m.AddWithProtocol(ctx, requestedPort, "socks5")
+	return m.AddWithProtocol(ctx, requestedPort, "hy2")
 }
 
 func (m *Manager) AddWithProtocol(ctx context.Context, requestedPort *int, protocol string) (Proxy, error) {
@@ -850,9 +850,9 @@ func (m *Manager) normalizeProxyIDs() error {
 
 func normalizeProtocol(protocol string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(protocol)) {
-	case "", "socks", "socks5", "sk5":
+	case "socks", "socks5", "sk5":
 		return "socks5", nil
-	case "hy2", "hysteria", "hysteria2":
+	case "", "hy2", "hysteria", "hysteria2":
 		return "hy2", nil
 	default:
 		return "", fmt.Errorf("unsupported inbound protocol %q", protocol)

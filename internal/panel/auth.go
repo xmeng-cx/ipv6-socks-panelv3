@@ -27,7 +27,11 @@ func newUser(username, password, role string) (User, error) {
 	if _, err := rand.Read(salt); err != nil {
 		return User{}, err
 	}
-	return User{Username: username, Role: role, PasswordSalt: hex.EncodeToString(salt), PasswordHash: derivePassword(password, salt), ProxyPassword: password, CreatedAt: time.Now().UTC()}, nil
+	token, err := randomSecret()
+	if err != nil {
+		return User{}, err
+	}
+	return User{Username: username, Role: role, PasswordSalt: hex.EncodeToString(salt), PasswordHash: derivePassword(password, salt), ProxyPassword: password, SubscriptionToken: token, CreatedAt: time.Now().UTC()}, nil
 }
 
 func validUsername(value string) bool {

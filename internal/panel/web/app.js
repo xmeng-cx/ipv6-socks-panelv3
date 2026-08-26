@@ -1,6 +1,7 @@
 const $ = (id) => document.getElementById(id);
 let system = null;
 let toastTimer = null;
+let accountUsers = [];
 
 async function api(path, options = {}) {
   const response = await fetch(path, {headers:{"Content-Type":"application/json"}, ...options});
@@ -109,12 +110,18 @@ async function refresh() {
   try {
     const [health, list] = await Promise.all([api("/api/v1/health"), api("/api/v1/proxies")]);
     system = health;
-    $("prefix").textContent = health.network.prefix;
-    $("iface").textContent = health.network.interface;
+    $("networkPrefixMetric").classList.toggle("hidden", !health.isAdmin);
+    $("networkInterfaceMetric").classList.toggle("hidden", !health.isAdmin);
+    if (health.isAdmin) {
+      $("prefix").textContent = health.network.prefix;
+      $("iface").textContent = health.network.interface;
+    }
     $("proxyCount").textContent = `${health.proxyCount} / ${health.maxProxies}`;
     $("username").textContent = health.username;
     $("currentUser").textContent = `${health.username}${health.isAdmin ? " · 管理员" : ""}`;
+    $("subscriptionUrl").value = health.subscriptionUrl || "";
     $("editPrefixBtn").classList.toggle("hidden", !health.isAdmin);
+    $("addBtn").classList.toggle("hidden", !health.isAdmin);
     $("userAdmin").classList.toggle("hidden", !health.isAdmin);
     $("rangeHint").textContent = `端口 ${health.basePort}–${health.basePort + health.maxProxies - 1} · TCP${health.udp ? " + UDP" : ""}`;
     const badge = $("healthBadge"); badge.className = "health ok"; badge.innerHTML = "<span></span>系统正常";
@@ -131,13 +138,18 @@ async function createProxy(event) {
   if (event.submitter?.value === "cancel") { $("addDialog").close(); return; }
   const manual = $("manualPort").checked;
   const protocol = $("protocolInput").value;
+  const owner = $("proxyOwnerInput").value;
+  const count = Number($("proxyCountInput").value);
   const port = Number($("portInput").value);
+  if (!owner) { toast("请选择线路账号", true); return; }
+  if (!Number.isInteger(count) || count < 1 || count > system.maxProxies) { toast(`创建数量必须为 1–${system.maxProxies}`, true); return; }
+  if (manual && count !== 1) { toast("手动指定端口时只能创建 1 条线路", true); return; }
   if (manual && (!Number.isInteger(port) || port < 1 || port > 65535)) { toast("请输入有效端口", true); return; }
   $("confirmAdd").disabled = true;
   try {
-    const payload = manual ? {port, protocol} : {protocol};
-    const proxy = await api("/api/v1/proxies", {method:"POST", body:JSON.stringify(payload)});
-    $("addDialog").close(); toast(`线路已创建：端口 ${proxy.port}`); await refresh();
+    const payload = manual ? {port, protocol, owner, count} : {protocol, owner, count};
+    const result = await api("/api/v1/proxies", {method:"POST", body:JSON.stringify(payload)});
+    $("addDialog").close(); toast(`已为 ${owner} 创建 ${result.count} 条线路`); await refresh();
   } catch (error) { toast(error.message, true); }
   finally { $("confirmAdd").disabled = false; }
 }
@@ -154,7 +166,13 @@ async function rotateAll() {
 
 async function refreshUsers() {
   const result = await api("/api/v1/users");
-  $("userRows").innerHTML = result.users.map(user => `<tr><td><strong>${escapeText(user.username)}</strong></td><td>${user.role === "admin" ? "管理员" : "普通用户"}</td><td>${user.proxyCount}</td><td class="right">${user.role === "admin" ? "—" : `<button class="smallBtn danger" data-delete-user="${escapeText(user.username)}">删除</button>`}</td></tr>`).join("");
+  accountUsers = result.users;
+  $("userRows").innerHTML = result.users.map(user => `<tr><td><strong>${escapeText(user.username)}</strong></td><td>${user.role === "admin" ? "管理员" : "普通用户"}</td><td>${user.proxyCount}</td><td><button class="smallBtn" data-copy-sub="${escapeText(user.username)}">复制链接</button></td><td class="right">${user.role === "admin" ? "—" : `<button class="smallBtn danger" data-delete-user="${escapeText(user.username)}">删除</button>`}</td></tr>`).join("");
+  $("userRows").querySelectorAll("[data-copy-sub]").forEach(button => button.addEventListener("click", async () => {
+    const user = result.users.find(item => item.username === button.dataset.copySub);
+    try { await copyText(user.subscriptionUrl); toast(`已复制 ${user.username} 的订阅链接`); }
+    catch (error) { toast(error.message, true); }
+  }));
   $("userRows").querySelectorAll("[data-delete-user]").forEach(button => button.addEventListener("click", () => deleteUser(button.dataset.deleteUser, button)));
 }
 
@@ -165,7 +183,7 @@ async function createUser(event) {
   $("confirmUser").disabled = true;
   try {
     await api("/api/v1/users", {method:"POST", body:JSON.stringify({username,password})});
-    $("userDialog").close(); toast(`用户 ${username} 已创建`); await refreshUsers();
+    $("userDialog").close(); toast(`用户 ${username} 已创建，并建立了 10 条 HY2 线路`); await refreshUsers();
   } catch (error) { toast(error.message, true); }
   finally { $("confirmUser").disabled = false; }
 }
@@ -197,6 +215,20 @@ async function updatePrefix(event) {
   finally { $("confirmPrefix").disabled = false; }
 }
 
+async function updateDirectRules(event) {
+  event.preventDefault();
+  if (event.submitter?.value === "cancel") { $("directDialog").close(); return; }
+  const directRules = $("directRulesInput").value.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+  $("confirmDirect").disabled = true;
+  try {
+    const result = await api("/api/v1/subscription/settings", {method:"PUT", body:JSON.stringify({directRules})});
+    system.directRules = result.directRules;
+    $("directDialog").close();
+    toast(`直连设置已保存，共 ${result.directRules.length} 项`);
+  } catch (error) { toast(error.message, true); }
+  finally { $("confirmDirect").disabled = false; }
+}
+
 async function pollJob(id) {
   try {
     const job = await api(`/api/v1/jobs/${id}`);
@@ -210,14 +242,35 @@ async function pollJob(id) {
   } catch (error) { toast(error.message, true); $("rotateAllBtn").disabled = false; }
 }
 
-$("addBtn").addEventListener("click", () => { $("manualPort").checked = false; $("portField").classList.add("hidden"); $("portInput").value = ""; $("protocolInput").value = "socks5"; $("addDialog").showModal(); });
+$("addBtn").addEventListener("click", () => {
+  $("manualPort").checked = false;
+  $("manualPort").disabled = false;
+  $("portField").classList.add("hidden");
+  $("portInput").value = "";
+  $("protocolInput").value = "hy2";
+  $("proxyCountInput").value = "1";
+  $("proxyCountInput").max = system?.maxProxies || 100;
+  $("proxyOwnerInput").innerHTML = accountUsers.map(user => `<option value="${escapeText(user.username)}">${escapeText(user.username)}${user.role === "admin" ? "（管理员）" : ""}</option>`).join("");
+  $("addDialog").showModal();
+});
 $("manualPort").addEventListener("change", (event) => $("portField").classList.toggle("hidden", !event.target.checked));
+$("proxyCountInput").addEventListener("input", (event) => {
+  const batch = Number(event.target.value) > 1;
+  $("manualPort").disabled = batch;
+  if (batch) { $("manualPort").checked = false; $("portField").classList.add("hidden"); }
+});
 $("addForm").addEventListener("submit", createProxy);
 $("editPrefixBtn").addEventListener("click", () => { $("interfaceInput").value = system?.network?.interface || ""; $("prefixInput").value = system?.network?.prefix || ""; $("prefixDialog").showModal(); });
 $("prefixForm").addEventListener("submit", updatePrefix);
 $("rotateAllBtn").addEventListener("click", rotateAll);
 $("addUserBtn").addEventListener("click", () => { $("newUsername").value=""; $("newPassword").value=""; $("userDialog").showModal(); });
 $("userForm").addEventListener("submit", createUser);
+$("directSettingsBtn").addEventListener("click", () => { $("directRulesInput").value = (system?.directRules || []).join("\n"); $("directDialog").showModal(); });
+$("directForm").addEventListener("submit", updateDirectRules);
 $("logoutBtn").addEventListener("click", logout);
+$("copySubscriptionBtn").addEventListener("click", async () => {
+  try { await copyText($("subscriptionUrl").value); toast("Mihomo 订阅链接已复制"); }
+  catch (error) { toast(error.message, true); }
+});
 refresh();
 setInterval(refresh, 10000);

@@ -28,3 +28,17 @@ func TestStateStoreRoundTrip(t *testing.T) {
 		t.Fatalf("state permissions are too broad: %o", info.Mode().Perm())
 	}
 }
+
+func TestStateStoreLoadsPreviousVersion(t *testing.T) {
+	store := NewStateStore(t.TempDir())
+	if err := store.Save(State{Version: stateVersion - 1, Pending: map[string]PendingOperation{}}); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Version != stateVersion-1 {
+		t.Fatalf("unexpected version: %d", state.Version)
+	}
+}
