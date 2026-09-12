@@ -40,6 +40,8 @@ class HTTPPanelStub:
         self.network = {"interface": "eth0", "prefix": "2001:db8::/64", "ipv4": "192.0.2.1"}
         self.xray = RunningProcess()
         self.created = None
+        self.jobs = {}
+        self.rotated = []
 
     def authenticate(self, username, password):
         return next((u for u in self.state["users"] if u["username"] == username and ((username == "xmeng" and password == "5201314") or (username == "alice" and password == "alice123"))), None)
@@ -47,8 +49,12 @@ class HTTPPanelStub:
     def find_user(self, username, state):
         return next((u for u in state["users"] if u["username"] == username), None)
 
-    def list_for_user(self, _username):
-        return []
+    def list_for_user(self, username):
+        return [{"id": "20000", "port": 20000, "ipv6": "2001:db8::1", "owner": username, "protocol": "hy2"}]
+
+    def rotate_proxy(self, username, proxy_id):
+        self.rotated.append((username, proxy_id))
+        return {"id": proxy_id, "ipv6": "2001:db8::2"}
 
     def create_proxies(self, owner, protocol, count, port):
         self.created = (owner, protocol, count, port)
@@ -128,6 +134,48 @@ class PanelPythonTests(unittest.TestCase):
             response.read()
             self.assertEqual(response.status, 201)
             self.assertEqual(panel.created, ("alice", "hy2", 10, None))
+
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
+            connection.request("GET", "/api/v1/health", headers={"Cookie": admin_cookie, "Host": "panel.example.com", "X-Forwarded-Proto": "https"})
+            response = connection.getresponse()
+            health = json.loads(response.read())
+            self.assertEqual(response.status, 200)
+            self.assertTrue(health["subscriptionUrl"].startswith("https://panel.example.com/sub/"))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_get_rotates_all_ips_by_username_without_login(self):
+        panel = HTTPPanelStub()
+        server = app.Server(("127.0.0.1", 0), app.Handler)
+        server.panel = panel
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
+            connection.request("GET", "/api/v1/rotate-ip?username=alice")
+            response = connection.getresponse()
+            payload = json.loads(response.read())
+            self.assertEqual(response.status, 202)
+            self.assertEqual(payload["total"], 1)
+            for _ in range(20):
+                if panel.rotated:
+                    break
+                threading.Event().wait(.01)
+            self.assertEqual(panel.rotated, [("alice", "20000")])
+
+            panel.rotated.clear()
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
+            connection.request("GET", "/api/v1/rotate-ip?username=alice&port=20000")
+            response = connection.getresponse()
+            response.read()
+            self.assertEqual(response.status, 202)
+            for _ in range(100):
+                if panel.rotated:
+                    break
+                threading.Event().wait(.01)
+            self.assertEqual(panel.rotated, [("alice", "20000")])
         finally:
             server.shutdown()
             server.server_close()

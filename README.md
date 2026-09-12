@@ -28,6 +28,14 @@
 curl -fsSL https://raw.githubusercontent.com/xmeng-cx/ipv6-socks-panelv3/main/install.sh | sh
 ```
 
+安装时可选择开启 HTTPS，输入已解析到服务器的域名后，脚本会通过 Nginx + Let's Encrypt 自动申请免费证书并配置续期。也可无交互执行：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/xmeng-cx/ipv6-socks-panelv3/main/install.sh | sh -s -- --https panel.example.com admin@example.com
+```
+
+申请证书前，请确保域名 A/AAAA 记录已指向该服务器，且公网 TCP 80 和 443 端口可访问。
+
 安装脚本会：
 
 1. 安装 Python 3、curl、OpenSSL、iproute2、Git 和 unzip。
@@ -131,6 +139,13 @@ curl -b panel-cookie.txt -X POST -H 'Content-Type: application/json' \
 
 # 查看当前账号线路
 curl -b panel-cookie.txt http://SERVER_IP:8080/api/v1/proxies
+
+# 无需登录：按用户名更换全部线路 IP
+curl 'http://SERVER_IP:8080/api/v1/rotate-ip?username=alice'
+
+# 无需登录：按用户名和端口只更换单条线路
+curl 'http://SERVER_IP:8080/api/v1/rotate-ip?username=alice&port=20000'
+# 等价路径形式：/api/v1/rotate-ip/alice/20000
 
 # 换 IP / 删除线路
 curl -b panel-cookie.txt -X POST http://SERVER_IP:8080/api/v1/proxies/20000/rotate

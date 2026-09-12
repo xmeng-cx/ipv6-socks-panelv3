@@ -784,11 +784,38 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return user
 
     def subscription_url(self, token):
-        scheme = "https" if isinstance(self.connection, ssl.SSLSocket) else "http"
+        forwarded = self.headers.get("X-Forwarded-Proto", "").split(",", 1)[0].strip().lower()
+        scheme = "https" if forwarded == "https" or isinstance(self.connection, ssl.SSLSocket) else "http"
         return "%s://%s/sub/%s" % (scheme, self.headers.get("Host", "localhost"), token)
 
+    def start_rotate_job(self, owner, proxy_id=None):
+        proxies = self.panel.list_for_user(owner)
+        if proxy_id:
+            proxies = [proxy for proxy in proxies if proxy["id"] == str(proxy_id)]
+            if not proxies:
+                raise PanelError("该账号下不存在指定端口的线路", 404, "proxy_not_found")
+        job_id = secrets.token_hex(12)
+        job = {"id": job_id, "status": "running", "total": len(proxies), "completed": 0, "succeeded": 0, "failed": 0, "createdAt": utc_now(), "items": {}, "owner": owner}
+        self.panel.jobs[job_id] = job
+        def rotate_all():
+            for proxy in proxies:
+                item = {"proxyId": proxy["id"], "status": "running", "oldIpv6": proxy["ipv6"]}
+                job["items"][proxy["id"]] = item
+                try:
+                    updated = self.panel.rotate_proxy(owner, proxy["id"])
+                    item.update({"status": "success", "newIpv6": updated["ipv6"]})
+                    job["succeeded"] += 1
+                except Exception as exc:
+                    item.update({"status": "failed", "error": str(exc)})
+                    job["failed"] += 1
+                job["completed"] += 1
+            job.update({"status": "completed", "completedAt": utc_now()})
+        threading.Thread(target=rotate_all, daemon=True).start()
+        return {k: v for k, v in job.items() if k != "owner"}
+
     def do_GET(self):
-        path = urllib.parse.urlsplit(self.path).path
+        parsed = urllib.parse.urlsplit(self.path)
+        path = parsed.path
         try:
             if path == "/healthz":
                 self.send_response(204 if self.panel.xray and self.panel.xray.poll() is None else 503)
@@ -824,10 +851,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 users = self.panel.users_view()
                 for user in users: user["subscriptionUrl"] = self.subscription_url(user.pop("subscriptionToken"))
                 self.json_response(200, {"users": users}); return
+            if path == "/api/v1/rotate-ip" or path.startswith("/api/v1/rotate-ip/"):
+                query = urllib.parse.parse_qs(parsed.query)
+                owner = query.get("username", [""])[0].strip()
+                proxy_id = query.get("port", query.get("id", [""]))[0].strip()
+                if path.startswith("/api/v1/rotate-ip/"):
+                    parts = [urllib.parse.unquote(part).strip() for part in path[len("/api/v1/rotate-ip/"):].split("/") if part]
+                    owner = parts[0] if parts else ""
+                    proxy_id = parts[1] if len(parts) > 1 else ""
+                if not owner:
+                    raise PanelError("请提供 username", 400, "username_required")
+                if not self.panel.find_user(owner, self.panel.state):
+                    raise PanelError("目标账号不存在", 404, "not_found")
+                self.json_response(202, self.start_rotate_job(owner, proxy_id or None)); return
             if path.startswith("/api/v1/jobs/"):
                 user = self.require_user()
                 job = self.panel.jobs.get(path.rsplit("/", 1)[-1]) if user else None
-                if not job or job["owner"] != user["username"]: raise PanelError("任务不存在", 404, "job_not_found")
+                if not job or (user["role"] != "admin" and job["owner"] != user["username"]): raise PanelError("任务不存在", 404, "job_not_found")
                 self.json_response(200, {k: v for k, v in job.items() if k != "owner"}); return
             self.serve_static(path)
         except Exception as error:
@@ -860,15 +900,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if path == "/api/v1/proxies/rotate-all":
                 user = self.require_user()
                 if not user: return
-                proxies = self.panel.list_for_user(user["username"]); job_id = secrets.token_hex(12); job = {"id": job_id, "status": "running", "total": len(proxies), "completed": 0, "succeeded": 0, "failed": 0, "createdAt": utc_now(), "items": {}, "owner": user["username"]}; self.panel.jobs[job_id] = job
-                def rotate_all():
-                    for proxy in proxies:
-                        item = {"proxyId": proxy["id"], "status": "running", "oldIpv6": proxy["ipv6"]}; job["items"][proxy["id"]] = item
-                        try: updated = self.panel.rotate_proxy(user["username"], proxy["id"]); item.update({"status": "success", "newIpv6": updated["ipv6"]}); job["succeeded"] += 1
-                        except Exception as exc: item.update({"status": "failed", "error": str(exc)}); job["failed"] += 1
-                        job["completed"] += 1
-                    job.update({"status": "completed", "completedAt": utc_now()})
-                threading.Thread(target=rotate_all, daemon=True).start(); self.json_response(202, {k: v for k, v in job.items() if k != "owner"}); return
+                self.json_response(202, self.start_rotate_job(user["username"])); return
             raise PanelError("接口不存在", 404, "not_found")
         except Exception as error:
             self.error_response(error)
