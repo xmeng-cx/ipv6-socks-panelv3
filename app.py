@@ -89,7 +89,7 @@ class Config:
         self.max_proxies = int(os.getenv("MAX_PROXIES", "100"))
         self.ipv6_interface = os.getenv("IPV6_INTERFACE", "").strip()
         self.ipv6_prefix = os.getenv("IPV6_PREFIX", "").strip()
-        self.ip_check_url = os.getenv("IP_CHECK_URL", "https://api64.ipify.org")
+        self.ip_check_url = os.getenv("IP_CHECK_URL", "https://api6.ipify.org")
         self.ip_check_timeout = env_seconds("IP_CHECK_TIMEOUT", 10)
         self.dad_timeout = env_seconds("DAD_TIMEOUT", 8)
         if not 1 <= self.max_proxies <= 100:
