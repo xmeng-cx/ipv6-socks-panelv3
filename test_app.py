@@ -77,13 +77,20 @@ class PanelPythonTests(unittest.TestCase):
         self.assertEqual(app.mihomo_direct_rule("1.1.1.1"), "IP-CIDR,1.1.1.1/32,DIRECT,no-resolve")
         self.assertEqual(app.mihomo_direct_rule("2001:db8::/32"), "IP-CIDR6,2001:db8::/32,DIRECT,no-resolve")
 
-    def test_mihomo_defaults_to_global(self):
+    def test_mihomo_android_root_template_and_default_proxy_group(self):
         config = app.mihomo_config([
             {"protocol": "hy2", "port": 20000, "username": "alice", "password": "secret"}
-        ], "panel.example.com", "5201314", ["example.cn"])
-        self.assertIn("mode: global", config)
+        ], "panel.example.com", "5201314", ["example.cn", "101.35.154.10"])
+        self.assertIn("mode: rule", config)
+        self.assertIn("external-ui: /data/adb/mihomo/ui", config)
+        self.assertIn("device: mihomo", config)
+        self.assertIn("strict-route: true", config)
+        self.assertIn('name: \"US-HY20000\"', config)
         self.assertIn("type: hysteria2", config)
         self.assertIn("DOMAIN-SUFFIX,example.cn,DIRECT", config)
+        self.assertIn("IP-CIDR,101.35.154.10/32,DIRECT,no-resolve", config)
+        self.assertIn("IP-CIDR6,fe80::/10,DIRECT,no-resolve", config)
+        self.assertTrue(config.rstrip().endswith("MATCH,全局代理"))
 
     def test_only_admin_can_create_lines_for_an_account(self):
         panel = HTTPPanelStub()

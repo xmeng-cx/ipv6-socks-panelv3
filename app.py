@@ -589,12 +589,88 @@ def yaml_quote(value):
 
 
 def mihomo_config(proxies, server, obfs_password, direct_rules):
-    lines = ["# IPv6 Socks Panel 自动生成的 Mihomo 配置", "mixed-port: 7890", "allow-lan: true", 'bind-address: "*"', "mode: global", "log-level: info", "ipv6: true", "unified-delay: true", "tcp-concurrent: true", "external-controller: 0.0.0.0:9090", 'secret: "xmeng"', "external-ui: ui", 'external-ui-url: "https://github.com/Zephyruso/zashboard/releases/latest/download/dist.zip"', "tun:", "  enable: true", "  stack: mixed", "  auto-route: true", "  auto-redirect: true", "  auto-detect-interface: true", "dns:", "  enable: true", "  listen: 0.0.0.0:1053", "  ipv6: true", "  enhanced-mode: fake-ip", "  fake-ip-range: 198.18.0.1/16", "  fake-ip-filter:", '    - "*.lan"', '    - "*.local"', "  default-nameserver:", "    - 223.5.5.5", "    - 119.29.29.29", "  nameserver:", "    - https://dns.alidns.com/dns-query", "    - https://doh.pub/dns-query", "proxies:"]
+    lines = [
+        "# Mihomo Android Root 完整配置",
+        "# 由 IPv6 Socks Panel 自动生成",
+        "# 保存路径：/data/adb/mihomo/config.yaml",
+        "",
+        "mixed-port: 7890",
+        "allow-lan: true",
+        'bind-address: "*"',
+        "mode: rule",
+        "log-level: info",
+        "ipv6: true",
+        "unified-delay: true",
+        "tcp-concurrent: true",
+        "external-controller: 0.0.0.0:9090",
+        'secret: "xmeng"',
+        "external-ui: /data/adb/mihomo/ui",
+        "external-ui-name: zashboard",
+        "profile:",
+        "  store-selected: true",
+        "  store-fake-ip: true",
+        "sniffer:",
+        "  enable: true",
+        "  force-dns-mapping: true",
+        "  parse-pure-ip: true",
+        "  sniff:",
+        "    HTTP:",
+        "      ports:",
+        "        - 80",
+        "        - 8080-8880",
+        "      override-destination: true",
+        "    TLS:",
+        "      ports:",
+        "        - 443",
+        "        - 8443",
+        "      override-destination: true",
+        "    QUIC:",
+        "      ports:",
+        "        - 443",
+        "        - 8443",
+        "      override-destination: true",
+        "tun:",
+        "  enable: true",
+        "  device: mihomo",
+        "  stack: mixed",
+        "  dns-hijack:",
+        '    - "any:53"',
+        '    - "tcp://any:53"',
+        "  auto-route: true",
+        "  auto-redirect: true",
+        "  auto-detect-interface: true",
+        "  strict-route: true",
+        "  mtu: 1400",
+        "dns:",
+        "  enable: true",
+        "  listen: 0.0.0.0:1053",
+        "  ipv6: false",
+        "  enhanced-mode: fake-ip",
+        "  fake-ip-range: 198.18.0.1/16",
+        "  use-hosts: true",
+        "  use-system-hosts: true",
+        "  fake-ip-filter:",
+        '    - "*.lan"',
+        '    - "*.local"',
+        '    - "localhost"',
+        '    - "+.msftconnecttest.com"',
+        '    - "+.msftncsi.com"',
+        "  default-nameserver:",
+        "    - 223.5.5.5",
+        "    - 119.29.29.29",
+        "  nameserver:",
+        "    - 223.5.5.5",
+        "    - 119.29.29.29",
+        "  proxy-server-nameserver:",
+        "    - 223.5.5.5",
+        "    - 119.29.29.29",
+        "proxies:",
+    ]
     names = []
     if not proxies:
         lines[-1] += " []"
     for proxy in proxies:
-        name = ("HY2-" if proxy["protocol"] == "hy2" else "SOCKS5-") + str(proxy["port"])
+        name = ("US-HY" if proxy["protocol"] == "hy2" else "US-SK5") + str(proxy["port"])
         names.append(name)
         lines += ["  - name: " + yaml_quote(name), "    type: " + ("hysteria2" if proxy["protocol"] == "hy2" else "socks5"), "    server: " + yaml_quote(server), "    port: %d" % proxy["port"]]
         if proxy["protocol"] == "hy2":
@@ -605,9 +681,18 @@ def mihomo_config(proxies, server, obfs_password, direct_rules):
     lines += ["proxy-groups:", '  - name: "全局代理"', "    type: select", "    proxies:"] + ["      - " + yaml_quote(n) for n in group_names]
     if names:
         lines.append('      - "自动选择"')
-    lines += ['  - name: "自动选择"', "    type: url-test", "    url: https://www.gstatic.com/generate_204", "    interval: 300", "    tolerance: 80", "    proxies:"] + ["      - " + yaml_quote(n) for n in group_names]
-    lines += ["rules:", "  - DOMAIN-SUFFIX,lan,DIRECT", "  - DOMAIN-SUFFIX,local,DIRECT", "  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve", "  - IP-CIDR,172.16.0.0/12,DIRECT,no-resolve", "  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve", "  - IP-CIDR6,fc00::/7,DIRECT,no-resolve"]
-    lines += ["  - " + mihomo_direct_rule(rule) for rule in direct_rules]
+    lines += ['  - name: "自动选择"', "    type: url-test", "    proxies:"] + ["      - " + yaml_quote(n) for n in group_names]
+    lines += ['    url: "http://[2001:67c:1898:11::46]/"', "    interval: 300", "    tolerance: 100", "    lazy: true"]
+    built_in_direct_rules = [
+        "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+        "100.64.0.0/10", "169.254.0.0/16", "::1/128", "fc00::/7", "fe80::/10",
+    ]
+    combined_direct_rules = []
+    for rule in list(direct_rules) + built_in_direct_rules:
+        rendered = mihomo_direct_rule(rule)
+        if rendered not in combined_direct_rules:
+            combined_direct_rules.append(rendered)
+    lines += ["rules:"] + ["  - " + rule for rule in combined_direct_rules]
     lines.append("  - MATCH,全局代理")
     return "\n".join(lines) + "\n"
 
