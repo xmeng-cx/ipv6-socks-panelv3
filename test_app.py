@@ -18,6 +18,7 @@ class ConfigStub:
         self.initial_proxies = 0
         self.base_port = 20000
         self.max_proxies = 100
+        self.dad_timeout = 1
 
 
 class RunningProcess:
