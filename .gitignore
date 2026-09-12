@@ -5,3 +5,5 @@ data/
 .xray-rules-add.go
 *.exe
 *.zip
+__pycache__/
+*.py[cod]

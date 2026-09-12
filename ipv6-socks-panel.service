@@ -1,0 +1,18 @@
+[Unit]
+Description=IPv6 SOCKS5/Hysteria2 Python Panel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=__INSTALL_DIR__
+EnvironmentFile=-__INSTALL_DIR__/.env
+ExecStart=/usr/bin/python3 __INSTALL_DIR__/app.py
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
