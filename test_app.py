@@ -79,6 +79,8 @@ class PanelPythonTests(unittest.TestCase):
         self.assertEqual(values, ["example.com", "1.1.1.1", "2001:db8::/32"])
         self.assertEqual(app.mihomo_direct_rule("1.1.1.1"), "IP-CIDR,1.1.1.1/32,DIRECT,no-resolve")
         self.assertEqual(app.mihomo_direct_rule("2001:db8::/32"), "IP-CIDR6,2001:db8::/32,DIRECT,no-resolve")
+        self.assertEqual(app.mihomo_direct_rule("example.com"), "DOMAIN,example.com,DIRECT")
+        self.assertEqual(app.mihomo_direct_rule("*.example.com"), "DOMAIN-SUFFIX,example.com,DIRECT")
 
     def test_mihomo_android_root_template_and_default_proxy_group(self):
         config = app.mihomo_config([
@@ -90,11 +92,11 @@ class PanelPythonTests(unittest.TestCase):
         self.assertIn("strict-route: true", config)
         self.assertIn('name: \"US-HY20000\"', config)
         self.assertIn("type: hysteria2", config)
-        self.assertIn("DOMAIN-SUFFIX,example.cn,DIRECT", config)
+        self.assertIn("DOMAIN,example.cn,DIRECT", config)
         self.assertIn("IP-CIDR,101.35.154.10/32,DIRECT,no-resolve", config)
         self.assertIn("IP-CIDR,192.0.2.10/32,DIRECT,no-resolve", config)
         self.assertIn("IP-CIDR6,fe80::/10,DIRECT,no-resolve", config)
-        self.assertIn("DOMAIN-SUFFIX,www.meiguodizhi.com,DIRECT", config)
+        self.assertIn("DOMAIN,www.meiguodizhi.com,DIRECT", config)
         self.assertTrue(config.rstrip().endswith("MATCH,全局代理"))
 
     def test_only_admin_can_create_lines_for_an_account(self):

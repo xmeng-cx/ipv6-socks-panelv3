@@ -604,7 +604,9 @@ def mihomo_direct_rule(value):
         kind = "IP-CIDR6" if network.version == 6 else "IP-CIDR"
         return "%s,%s,DIRECT,no-resolve" % (kind, network)
     except ValueError:
-        return "DOMAIN-SUFFIX,%s,DIRECT" % value.removeprefix("*.").removeprefix(".")
+        if value.startswith(("*.", ".")):
+            return "DOMAIN-SUFFIX,%s,DIRECT" % value.removeprefix("*.").removeprefix(".")
+        return "DOMAIN,%s,DIRECT" % value
 
 
 def yaml_quote(value):

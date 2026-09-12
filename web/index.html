@@ -101,7 +101,7 @@
     <form method="dialog" id="directForm">
       <div class="dialogHead"><div><p class="eyebrow">DIRECT RULES</p><h3>直连设置</h3></div><button value="cancel" class="iconBtn" aria-label="关闭">×</button></div>
       <label class="field"><span>需要直连的域名、IP 或 CIDR（每行一项）</span><textarea id="directRulesInput" rows="10" spellcheck="false" placeholder="example.com&#10;1.1.1.1&#10;192.168.50.0/24"></textarea></label>
-      <p class="dialogNote">保存后应用到所有账号的 Mihomo 订阅配置。域名会同时匹配其子域名。</p>
+      <p class="dialogNote">保存后应用到所有账号的 Mihomo 订阅配置。如需匹配所有子域名，请输入 *.example.com。</p>
       <div class="dialogActions"><button value="cancel" class="button ghost">取消</button><button id="confirmDirect" value="default" class="button primary">保存设置</button></div>
     </form>
   </dialog>

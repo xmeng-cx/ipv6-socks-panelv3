@@ -114,7 +114,7 @@ example.com
 2001:db8::/32
 ```
 
-系统会自动转换为 `DOMAIN-SUFFIX`、`IP-CIDR` 或 `IP-CIDR6` 规则。
+系统会自动转换为 `DOMAIN`、`IP-CIDR` 或 `IP-CIDR6` 规则；输入 `*.example.com` 时使用 `DOMAIN-SUFFIX`。
 
 ## API 示例
 
