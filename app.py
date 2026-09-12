@@ -227,8 +227,9 @@ class Panel:
                 proxy["ipv6"] = str(self.random_ip())
             self.add_address(proxy["ipv6"])
             proxy["status"] = "healthy"
-        while len(self.state["proxies"]) < self.cfg.initial_proxies:
-            self._create_proxies(self.cfg.admin_username, "hy2", 1)
+        missing = self.cfg.initial_proxies - len(self.state["proxies"])
+        if missing > 0:
+            self._create_proxies(self.cfg.admin_username, "hy2", missing)
         self.save()
         self.restart_xray()
         threading.Thread(target=self.monitor_xray, daemon=True).start()
@@ -266,8 +267,14 @@ class Panel:
             data = json.loads(self.run(["ip", "-j", "-6", "addr", "show", "dev", self.network["interface"]]).stdout or "[]")
             entries = data[0].get("addr_info", []) if data else []
             item = next((a for a in entries if a.get("local") == str(ip)), None)
-            if item and "tentative" not in item.get("flags", []) and "dadfailed" not in item.get("flags", []):
-                return
+            if item:
+                flags = {str(flag).lower() for flag in item.get("flags", [])}
+                tentative = bool(item.get("tentative")) or "tentative" in flags
+                dad_failed = bool(item.get("dadfailed")) or "dadfailed" in flags
+                if dad_failed:
+                    raise RuntimeError("IPv6 %s 重复地址检测失败" % ip)
+                if not tentative:
+                    return
             time.sleep(.15)
         raise RuntimeError("等待 IPv6 %s 就绪超时" % ip)
 
@@ -401,11 +408,14 @@ class Panel:
             raise PanelError("批量创建线路时不能手动指定端口", 400, "invalid_port")
         user = self.find_user(owner, self.state)
         created = []
+        activated = []
+        had_xray = bool(self.xray and self.xray.poll() is None)
         try:
             for _ in range(count):
                 port = self.allocate_port(requested_port)
                 ip = str(self.random_ip())
                 self.add_address(ip)
+                activated.append(ip)
                 self.check_egress(ip)
                 proxy = {"id": str(port), "port": port, "protocol": protocol, "ipv6": ip, "status": "healthy", "createdAt": utc_now(), "owner": owner, "username": owner, "password": user["proxyPassword"]}
                 self.state["proxies"].append(proxy)
@@ -416,9 +426,11 @@ class Panel:
         except Exception:
             for proxy in created:
                 self.state["proxies"].remove(proxy)
-                self.delete_address(proxy["ipv6"])
-            with contextlib.suppress(Exception):
-                self.restart_xray()
+            for ip in activated:
+                self.delete_address(ip)
+            if had_xray:
+                with contextlib.suppress(Exception):
+                    self.restart_xray()
             raise
 
     def delete_proxy(self, username, proxy_id):
@@ -800,20 +812,22 @@ class Server(http.server.ThreadingHTTPServer):
 def main():
     cfg = Config()
     panel = Panel(cfg)
-    panel.start()
-    host, port = cfg.web_listen.rsplit(":", 1)
-    server = Server((host, int(port)), Handler)
-    server.panel = panel
-    def shutdown(_signum, _frame):
-        threading.Thread(target=server.shutdown, daemon=True).start()
-    signal.signal(signal.SIGTERM, shutdown)
-    signal.signal(signal.SIGINT, shutdown)
-    print("Python 面板已启动：http://%s，网卡=%s，前缀=%s，线路=%d" % (cfg.web_listen, panel.network["interface"], panel.network["prefix"], len(panel.state["proxies"])), flush=True)
+    server = None
     try:
+        panel.start()
+        host, port = cfg.web_listen.rsplit(":", 1)
+        server = Server((host, int(port)), Handler)
+        server.panel = panel
+        def shutdown(_signum, _frame):
+            threading.Thread(target=server.shutdown, daemon=True).start()
+        signal.signal(signal.SIGTERM, shutdown)
+        signal.signal(signal.SIGINT, shutdown)
+        print("Python 面板已启动：http://%s，网卡=%s，前缀=%s，线路=%d" % (cfg.web_listen, panel.network["interface"], panel.network["prefix"], len(panel.state["proxies"])), flush=True)
         server.serve_forever()
     finally:
         panel.stop()
-        server.server_close()
+        if server:
+            server.server_close()
 
 
 if __name__ == "__main__":

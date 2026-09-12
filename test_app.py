@@ -1,5 +1,6 @@
 import json
 import http.client
+import ipaddress
 import tempfile
 import threading
 import unittest
@@ -117,5 +118,25 @@ class PanelPythonTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
+
+    def test_failed_first_line_removes_activated_address(self):
+        panel = app.Panel.__new__(app.Panel)
+        panel.lock = threading.RLock()
+        panel.cfg = ConfigStub(tempfile.gettempdir())
+        panel.state = {"users": [{"username": "alice", "proxyPassword": "secret"}], "proxies": []}
+        panel.prefix = ipaddress.ip_network("2001:db8::/64")
+        panel.network = {"interface": "eth0"}
+        panel.xray = None
+        activated, deleted, restarted = [], [], []
+        panel.random_ip = lambda: ipaddress.ip_address("2001:db8::2")
+        panel.add_address = activated.append
+        panel.delete_address = deleted.append
+        panel.check_egress = lambda _ip: (_ for _ in ()).throw(RuntimeError("egress failed"))
+        panel.restart_xray = lambda: restarted.append(True)
+        with self.assertRaisesRegex(RuntimeError, "egress failed"):
+            panel._create_proxies("alice", "hy2", 1)
+        self.assertEqual(activated, ["2001:db8::2"])
+        self.assertEqual(deleted, ["2001:db8::2"])
+        self.assertEqual(restarted, [])
 if __name__ == "__main__":
     unittest.main()
