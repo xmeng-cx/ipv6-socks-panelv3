@@ -260,13 +260,13 @@ class Panel:
     def add_address(self, ip):
         cidr = "%s/%d" % (ip, self.prefix.prefixlen)
         result = self.run(["ip", "-6", "addr", "add", cidr, "dev", self.network["interface"], "noprefixroute"], check=False)
-        if result.returncode and "File exists" not in result.stderr:
-            raise RuntimeError(result.stderr.strip())
         deadline = time.time() + self.cfg.dad_timeout
         while time.time() < deadline:
             data = json.loads(self.run(["ip", "-j", "-6", "addr", "show", "dev", self.network["interface"]]).stdout or "[]")
             entries = data[0].get("addr_info", []) if data else []
             item = next((a for a in entries if a.get("local") == str(ip)), None)
+            if result.returncode and not item:
+                raise RuntimeError(result.stderr.strip())
             if item:
                 flags = {str(flag).lower() for flag in item.get("flags", [])}
                 tentative = bool(item.get("tentative")) or "tentative" in flags

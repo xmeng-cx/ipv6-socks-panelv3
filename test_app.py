@@ -5,6 +5,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import app
 
@@ -145,5 +146,17 @@ class PanelPythonTests(unittest.TestCase):
         self.assertEqual(activated, ["2001:db8::2"])
         self.assertEqual(deleted, ["2001:db8::2"])
         self.assertEqual(restarted, [])
+
+    def test_existing_ipv6_is_accepted_independent_of_iproute_error_text(self):
+        panel = app.Panel.__new__(app.Panel)
+        panel.cfg = ConfigStub(tempfile.gettempdir())
+        panel.prefix = ipaddress.ip_network("2001:db8::/64")
+        panel.network = {"interface": "eth0"}
+        responses = iter([
+            SimpleNamespace(returncode=2, stdout="", stderr="Error: ipv6: address already assigned."),
+            SimpleNamespace(returncode=0, stdout=json.dumps([{"addr_info": [{"local": "2001:db8::2", "family": "inet6"}]}]), stderr=""),
+        ])
+        panel.run = lambda *_args, **_kwargs: next(responses)
+        panel.add_address(ipaddress.ip_address("2001:db8::2"))
 if __name__ == "__main__":
     unittest.main()
