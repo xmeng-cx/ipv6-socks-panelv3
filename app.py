@@ -81,6 +81,8 @@ class Config:
         self.socks_udp = env_bool("SOCKS_UDP", True)
         self.udp_advertise_ip = os.getenv("SOCKS_UDP_ADVERTISE_IP", "").strip()
         self.advertise_host = os.getenv("ADVERTISE_HOST", "").strip()
+        self.tls_cert_file = os.getenv("TLS_CERT_FILE", "").strip()
+        self.tls_key_file = os.getenv("TLS_KEY_FILE", "").strip()
         self.admin_username = os.getenv("ADMIN_USERNAME", "xmeng")
         self.admin_password = os.getenv("ADMIN_PASSWORD", "5201314")
         self.hy2_obfs_password = os.getenv("HY2_OBFS_PASSWORD", "5201314")
@@ -96,6 +98,12 @@ class Config:
             raise ValueError("MAX_PROXIES must be between 1 and 100")
         if not 0 <= self.initial_proxies <= self.max_proxies:
             raise ValueError("INITIAL_PROXIES must be between 0 and MAX_PROXIES")
+        if bool(self.tls_cert_file) != bool(self.tls_key_file):
+            raise ValueError("TLS_CERT_FILE and TLS_KEY_FILE must be configured together")
+
+    @property
+    def tls_enabled(self):
+        return bool(self.tls_cert_file and self.tls_key_file)
 
 
 def derive_password(password, salt):
@@ -319,6 +327,11 @@ class Panel:
             raise RuntimeError("IPv6 出站不一致，预期 %s，实际 %s" % (ip, observed))
 
     def ensure_certificate(self):
+        if self.cfg.tls_enabled:
+            cert, key = Path(self.cfg.tls_cert_file), Path(self.cfg.tls_key_file)
+            if not cert.is_file() or not key.is_file():
+                raise RuntimeError("已配置的 HTTPS 证书或私钥不存在")
+            return cert, key
         tls_dir = self.cfg.data_dir / "tls"
         cert, key = tls_dir / "hy2.crt", tls_dir / "hy2.key"
         if cert.exists() and key.exists():
@@ -613,7 +626,7 @@ def yaml_quote(value):
     return json.dumps(str(value), ensure_ascii=False)
 
 
-def mihomo_config(proxies, server, obfs_password, direct_rules):
+def mihomo_config(proxies, server, obfs_password, direct_rules, tls_verified=False):
     lines = [
         "# Mihomo Android Root 完整配置",
         "# 由 IPv6 Socks Panel 自动生成",
@@ -699,7 +712,7 @@ def mihomo_config(proxies, server, obfs_password, direct_rules):
         names.append(name)
         lines += ["  - name: " + yaml_quote(name), "    type: " + ("hysteria2" if proxy["protocol"] == "hy2" else "socks5"), "    server: " + yaml_quote(server), "    port: %d" % proxy["port"]]
         if proxy["protocol"] == "hy2":
-            lines += ["    password: " + yaml_quote(proxy["password"]), "    sni: " + yaml_quote(server), "    skip-cert-verify: true", "    obfs: salamander", "    obfs-password: " + yaml_quote(obfs_password), "    alpn:", "      - h3", "      - h2", "      - http/1.1", "    udp: true"]
+            lines += ["    password: " + yaml_quote(proxy["password"]), "    sni: " + yaml_quote(server), "    skip-cert-verify: " + ("false" if tls_verified else "true"), "    obfs: salamander", "    obfs-password: " + yaml_quote(obfs_password), "    alpn:", "      - h3", "      - h2", "      - http/1.1", "    udp: true"]
         else:
             lines += ["    username: " + yaml_quote(proxy["username"]), "    password: " + yaml_quote(proxy["password"]), "    udp: true"]
     group_names = names or ["DIRECT"]
@@ -828,7 +841,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     self.send_error(404)
                     return
                 host = self.panel.cfg.advertise_host or self.headers.get("Host", "localhost").split(":", 1)[0]
-                body = mihomo_config(self.panel.list_for_user(user["username"]), host, self.panel.cfg.hy2_obfs_password, self.panel.state["directRules"]).encode()
+                body = mihomo_config(self.panel.list_for_user(user["username"]), host, self.panel.cfg.hy2_obfs_password, self.panel.state["directRules"], self.panel.cfg.tls_enabled).encode()
                 self.send_response(200); self.security_headers(); self.send_header("Content-Type", "text/yaml; charset=utf-8"); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
             if path == "/api/v1/auth/me":
                 user = self.require_user()
@@ -839,7 +852,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if not user: return
                 proxies = self.panel.list_for_user(user["username"])
                 xray_running = bool(self.panel.xray and self.panel.xray.poll() is None)
-                result = {"status": "healthy" if xray_running else "unhealthy", "message": "ok" if xray_running else "Xray 未运行", "xrayRunning": xray_running, "proxyCount": len(proxies), "initialProxies": self.panel.cfg.initial_proxies, "maxProxies": self.panel.cfg.max_proxies, "basePort": self.panel.cfg.base_port, "username": user["username"], "role": user["role"], "isAdmin": user["role"] == "admin", "advertiseHost": self.panel.cfg.advertise_host, "udp": self.panel.cfg.socks_udp, "hy2ObfsPassword": self.panel.cfg.hy2_obfs_password, "subscriptionUrl": self.subscription_url(user["subscriptionToken"])}
+                result = {"status": "healthy" if xray_running else "unhealthy", "message": "ok" if xray_running else "Xray 未运行", "xrayRunning": xray_running, "proxyCount": len(proxies), "initialProxies": self.panel.cfg.initial_proxies, "maxProxies": self.panel.cfg.max_proxies, "basePort": self.panel.cfg.base_port, "username": user["username"], "role": user["role"], "isAdmin": user["role"] == "admin", "advertiseHost": self.panel.cfg.advertise_host, "udp": self.panel.cfg.socks_udp, "hy2ObfsPassword": self.panel.cfg.hy2_obfs_password, "tlsVerified": self.panel.cfg.tls_enabled, "subscriptionUrl": self.subscription_url(user["subscriptionToken"])}
                 if user["role"] == "admin": result.update({"network": self.panel.network, "totalProxyCount": len(self.panel.state["proxies"]), "directRules": self.panel.state["directRules"]})
                 self.json_response(200 if xray_running else 503, result); return
             if path == "/api/v1/proxies":
@@ -960,11 +973,16 @@ def main():
         host, port = cfg.web_listen.rsplit(":", 1)
         server = Server((host, int(port)), Handler)
         server.panel = panel
+        if cfg.tls_enabled:
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
+            context.load_cert_chain(cfg.tls_cert_file, cfg.tls_key_file)
+            server.socket = context.wrap_socket(server.socket, server_side=True)
         def shutdown(_signum, _frame):
             threading.Thread(target=server.shutdown, daemon=True).start()
         signal.signal(signal.SIGTERM, shutdown)
         signal.signal(signal.SIGINT, shutdown)
-        print("Python 面板已启动：http://%s，网卡=%s，前缀=%s，线路=%d" % (cfg.web_listen, panel.network["interface"], panel.network["prefix"], len(panel.state["proxies"])), flush=True)
+        print("Python 面板已启动：%s://%s，网卡=%s，前缀=%s，线路=%d" % ("https" if cfg.tls_enabled else "http", cfg.web_listen, panel.network["interface"], panel.network["prefix"], len(panel.state["proxies"])), flush=True)
         server.serve_forever()
     finally:
         panel.stop()

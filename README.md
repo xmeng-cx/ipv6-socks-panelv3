@@ -28,7 +28,7 @@
 curl -fsSL https://raw.githubusercontent.com/xmeng-cx/ipv6-socks-panelv3/main/install.sh | sh
 ```
 
-安装时可选择开启 HTTPS，输入已解析到服务器的域名后，脚本会通过 Nginx + Let's Encrypt 自动申请免费证书并配置续期。也可无交互执行：
+安装时可选择开启 HTTPS，输入已解析到服务器的域名后，脚本会通过 `acme.sh` 自动申请 Let's Encrypt 免费证书并配置续期，无需 Nginx。Python 面板直接提供 HTTPS，所有 HY2 入站也共用这张正式证书。也可无交互执行：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/xmeng-cx/ipv6-socks-panelv3/main/install.sh | sh -s -- --https panel.example.com admin@example.com
@@ -156,6 +156,6 @@ curl -b panel-cookie.txt -X DELETE http://SERVER_IP:8080/api/v1/proxies/20000
 
 - 状态：`data/state.json`
 - Xray 配置：`data/xray.json`
-- HY2 证书：`data/tls/hy2.crt`、`data/tls/hy2.key`
+- HTTPS 开启时，面板和 HY2 共用 `/root/cert/<域名>/fullchain.pem`、`privkey.pem`；未开启时 HY2 使用 `data/tls/hy2.crt`、`data/tls/hy2.key`。
 - 订阅链接相当于访问密钥，请勿公开；删除用户后链接立即失效。
-- 管理页面默认使用 HTTP，公网使用时建议通过反向代理配置 HTTPS，并限制管理端口访问来源。
+- 管理页面默认使用 HTTP；安装时启用 HTTPS 后由 Python 直接监听 443，并由 `acme.sh` 自动续期证书。

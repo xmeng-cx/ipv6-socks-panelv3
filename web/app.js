@@ -32,7 +32,8 @@ function connectionURI(proxy) {
     const endpointHost = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
     const obfsPassword = system.hy2ObfsPassword;
     const finalMask = {udp:[{type:"salamander",settings:{password:obfsPassword}}]};
-    const params = new URLSearchParams({security:"tls",fp:"chrome",alpn:"h3,h2,http/1.1",sni:host,insecure:"1",obfs:"salamander","obfs-password":obfsPassword,fm:JSON.stringify(finalMask)});
+    const params = new URLSearchParams({security:"tls",fp:"chrome",alpn:"h3,h2,http/1.1",sni:host,obfs:"salamander","obfs-password":obfsPassword,fm:JSON.stringify(finalMask)});
+    if (!system.tlsVerified) params.set("insecure", "1");
     return `hysteria2://${encodeURIComponent(proxy.password)}@${endpointHost}:${proxy.port}?${params.toString()}#HY2-${proxy.port}`;
   }
   return `socks5://${encodeURIComponent(proxy.username)}:${encodeURIComponent(proxy.password)}@${host}:${proxy.port}`;

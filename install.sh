@@ -52,12 +52,8 @@ fi
 if command -v apt-get >/dev/null 2>&1; then
   apt-get update
   DEBIAN_FRONTEND=noninteractive apt-get install -y python3 curl unzip openssl iproute2 git ca-certificates
-  if [ "$ENABLE_HTTPS" = "1" ]; then
-    DEBIAN_FRONTEND=noninteractive apt-get install -y nginx certbot
-  fi
 elif command -v apk >/dev/null 2>&1; then
   apk add --no-cache python3 curl unzip openssl iproute2 git ca-certificates
-  if [ "$ENABLE_HTTPS" = "1" ]; then apk add --no-cache nginx certbot; fi
 else
   echo "错误：仅支持使用 apt 或 apk 的 Linux 系统。" >&2
   exit 1
@@ -127,73 +123,33 @@ if [ "$ENABLE_HTTPS" = "1" ]; then
       printf '%s=%s\n' "$ENV_KEY" "$ENV_VALUE" >> "$PANEL_INSTALL_DIR/.env"
     fi
   }
-  set_env_value WEB_LISTEN 127.0.0.1:8080
+  ACME_HOME=/root/.acme.sh
+  if [ ! -x "$ACME_HOME/acme.sh" ]; then
+    echo "正在安装 acme.sh…"
+    if [ -n "$HTTPS_EMAIL" ]; then
+      curl -fsSL https://get.acme.sh | sh -s email="$HTTPS_EMAIL"
+    else
+      curl -fsSL https://get.acme.sh | sh
+    fi
+  fi
+  "$ACME_HOME/acme.sh" --set-default-ca --server letsencrypt
+  echo "正在使用 80 端口申请 Let's Encrypt 证书…"
+  "$ACME_HOME/acme.sh" --issue --standalone --httpport 80 -d "$HTTPS_DOMAIN" --keylength ec-256
+  CERT_DIR="/root/cert/$HTTPS_DOMAIN"
+  mkdir -p "$CERT_DIR"
+  "$ACME_HOME/acme.sh" --install-cert -d "$HTTPS_DOMAIN" --ecc \
+    --key-file "$CERT_DIR/privkey.pem" \
+    --fullchain-file "$CERT_DIR/fullchain.pem" \
+    --reloadcmd "systemctl restart ipv6-socks-panel"
+  chmod 600 "$CERT_DIR/privkey.pem"
+  chmod 644 "$CERT_DIR/fullchain.pem"
+  "$ACME_HOME/acme.sh" --upgrade --auto-upgrade
+
+  set_env_value WEB_LISTEN 0.0.0.0:443
   set_env_value ADVERTISE_HOST "$HTTPS_DOMAIN"
+  set_env_value TLS_CERT_FILE "$CERT_DIR/fullchain.pem"
+  set_env_value TLS_KEY_FILE "$CERT_DIR/privkey.pem"
   systemctl restart ipv6-socks-panel
-
-  mkdir -p /var/www/html
-  if [ -d /etc/nginx/sites-available ]; then
-    NGINX_CONFIG=/etc/nginx/sites-available/ipv6-socks-panel
-    NGINX_ENABLED=/etc/nginx/sites-enabled/ipv6-socks-panel
-  else
-    NGINX_CONFIG=/etc/nginx/http.d/ipv6-socks-panel.conf
-    NGINX_ENABLED=
-  fi
-  cat > "$NGINX_CONFIG" <<EOF
-server {
-    listen 80;
-    listen [::]:80;
-    server_name $HTTPS_DOMAIN;
-    location ^~ /.well-known/acme-challenge/ { root /var/www/html; }
-    location / {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Forwarded-Proto http;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-    }
-}
-EOF
-  [ -z "$NGINX_ENABLED" ] || ln -sfn "$NGINX_CONFIG" "$NGINX_ENABLED"
-  nginx -t
-  systemctl enable --now nginx
-  systemctl reload nginx
-
-  if [ -n "$HTTPS_EMAIL" ]; then
-    certbot certonly --webroot -w /var/www/html -d "$HTTPS_DOMAIN" --non-interactive --agree-tos --email "$HTTPS_EMAIL" --keep-until-expiring
-  else
-    certbot certonly --webroot -w /var/www/html -d "$HTTPS_DOMAIN" --non-interactive --agree-tos --register-unsafely-without-email --keep-until-expiring
-  fi
-
-  cat > "$NGINX_CONFIG" <<EOF
-server {
-    listen 80;
-    listen [::]:80;
-    server_name $HTTPS_DOMAIN;
-    location ^~ /.well-known/acme-challenge/ { root /var/www/html; }
-    location / { return 301 https://\$host\$request_uri; }
-}
-server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
-    server_name $HTTPS_DOMAIN;
-    ssl_certificate /etc/letsencrypt/live/$HTTPS_DOMAIN/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/$HTTPS_DOMAIN/privkey.pem;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    location / {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Forwarded-Proto https;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-    }
-}
-EOF
-  nginx -t
-  systemctl reload nginx
-  mkdir -p /etc/letsencrypt/renewal-hooks/deploy
-  printf '#!/bin/sh\nsystemctl reload nginx\n' > /etc/letsencrypt/renewal-hooks/deploy/ipv6-socks-panel-nginx.sh
-  chmod 0755 /etc/letsencrypt/renewal-hooks/deploy/ipv6-socks-panel-nginx.sh
-  systemctl enable --now certbot.timer 2>/dev/null || true
 fi
 
 sleep 2

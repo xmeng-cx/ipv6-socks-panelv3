@@ -19,6 +19,7 @@ class ConfigStub:
         self.base_port = 20000
         self.max_proxies = 100
         self.dad_timeout = 1
+        self.tls_enabled = False
 
 
 class RunningProcess:
@@ -91,13 +92,14 @@ class PanelPythonTests(unittest.TestCase):
     def test_mihomo_android_root_template_and_default_proxy_group(self):
         config = app.mihomo_config([
             {"protocol": "hy2", "port": 20000, "username": "alice", "password": "secret"}
-        ], "192.0.2.10", "5201314", app.DEFAULT_DIRECT_RULES + ["example.cn"])
+        ], "192.0.2.10", "5201314", app.DEFAULT_DIRECT_RULES + ["example.cn"], True)
         self.assertIn("mode: rule", config)
         self.assertIn("external-ui: /data/adb/mihomo/ui", config)
         self.assertIn("device: mihomo", config)
         self.assertIn("strict-route: true", config)
         self.assertIn('name: \"US-HY20000\"', config)
         self.assertIn("type: hysteria2", config)
+        self.assertIn("skip-cert-verify: false", config)
         self.assertIn("DOMAIN,example.cn,DIRECT", config)
         self.assertIn("IP-CIDR,101.35.154.10/32,DIRECT,no-resolve", config)
         self.assertIn("IP-CIDR,192.0.2.10/32,DIRECT,no-resolve", config)
@@ -212,5 +214,15 @@ class PanelPythonTests(unittest.TestCase):
         ])
         panel.run = lambda *_args, **_kwargs: next(responses)
         panel.add_address(ipaddress.ip_address("2001:db8::2"))
+
+    def test_official_tls_certificate_is_reused_by_xray(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cert = Path(directory, "fullchain.pem")
+            key = Path(directory, "privkey.pem")
+            cert.write_text("certificate", "utf-8")
+            key.write_text("private-key", "utf-8")
+            panel = app.Panel.__new__(app.Panel)
+            panel.cfg = SimpleNamespace(tls_enabled=True, tls_cert_file=str(cert), tls_key_file=str(key))
+            self.assertEqual(panel.ensure_certificate(), (cert, key))
 if __name__ == "__main__":
     unittest.main()
