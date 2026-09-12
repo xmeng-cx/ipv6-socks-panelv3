@@ -26,11 +26,30 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 WEB_ROOT = ROOT / "web"
-STATE_VERSION = 3
+STATE_VERSION = 4
 SESSION_COOKIE = "ipv6_panel_session"
 SESSION_LIFETIME = 90 * 24 * 3600
 PASSWORD_ITERATIONS = 120000
 USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]{3,32}$")
+DEFAULT_DIRECT_RULES = [
+    "101.35.154.10/32",
+    "64.118.133.57/32",
+    "64.118.129.251/32",
+    "114.66.40.113/32",
+    "127.0.0.0/8",
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "100.64.0.0/10",
+    "169.254.0.0/16",
+    "::1/128",
+    "fc00::/7",
+    "fe80::/10",
+    "www.meiguodizhi.com",
+    "lyj.xmeng.eu.org",
+    "api.xuerabbit.cn",
+    "dcloud.net.cn",
+]
 
 
 def utc_now():
@@ -126,11 +145,15 @@ class Panel:
             if version < 1 or version > STATE_VERSION:
                 raise RuntimeError("unsupported state version %d" % version)
         else:
+            version = 0
             state = {"version": STATE_VERSION, "proxies": [], "pending": {}, "users": []}
         state.setdefault("proxies", [])
         state.setdefault("pending", {})
         state.setdefault("users", [])
-        state.setdefault("directRules", [])
+        if version < 4:
+            state["directRules"] = normalize_direct_rules(DEFAULT_DIRECT_RULES + state.get("directRules", []))
+        else:
+            state.setdefault("directRules", list(DEFAULT_DIRECT_RULES))
         state["version"] = STATE_VERSION
         if not state.get("sessionSecret"):
             state["sessionSecret"] = secrets.token_urlsafe(32)
@@ -688,7 +711,7 @@ def mihomo_config(proxies, server, obfs_password, direct_rules):
         "100.64.0.0/10", "169.254.0.0/16", "::1/128", "fc00::/7", "fe80::/10",
     ]
     combined_direct_rules = []
-    for rule in list(direct_rules) + built_in_direct_rules:
+    for rule in list(direct_rules) + [server] + built_in_direct_rules:
         rendered = mihomo_direct_rule(rule)
         if rendered not in combined_direct_rules:
             combined_direct_rules.append(rendered)

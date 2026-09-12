@@ -65,6 +65,7 @@ class PanelPythonTests(unittest.TestCase):
             panel = app.Panel(ConfigStub(directory))
             self.assertEqual(panel.state["version"], app.STATE_VERSION)
             self.assertTrue(panel.state["users"][0]["subscriptionToken"])
+            self.assertEqual(panel.state["directRules"], app.DEFAULT_DIRECT_RULES)
             self.assertEqual(panel.authenticate("xmeng", "5201314")["role"], "admin")
             self.assertIsNone(panel.authenticate("xmeng", "wrong-password"))
 
@@ -82,7 +83,7 @@ class PanelPythonTests(unittest.TestCase):
     def test_mihomo_android_root_template_and_default_proxy_group(self):
         config = app.mihomo_config([
             {"protocol": "hy2", "port": 20000, "username": "alice", "password": "secret"}
-        ], "panel.example.com", "5201314", ["example.cn", "101.35.154.10"])
+        ], "192.0.2.10", "5201314", app.DEFAULT_DIRECT_RULES + ["example.cn"])
         self.assertIn("mode: rule", config)
         self.assertIn("external-ui: /data/adb/mihomo/ui", config)
         self.assertIn("device: mihomo", config)
@@ -91,7 +92,9 @@ class PanelPythonTests(unittest.TestCase):
         self.assertIn("type: hysteria2", config)
         self.assertIn("DOMAIN-SUFFIX,example.cn,DIRECT", config)
         self.assertIn("IP-CIDR,101.35.154.10/32,DIRECT,no-resolve", config)
+        self.assertIn("IP-CIDR,192.0.2.10/32,DIRECT,no-resolve", config)
         self.assertIn("IP-CIDR6,fe80::/10,DIRECT,no-resolve", config)
+        self.assertIn("DOMAIN-SUFFIX,www.meiguodizhi.com,DIRECT", config)
         self.assertTrue(config.rstrip().endswith("MATCH,全局代理"))
 
     def test_only_admin_can_create_lines_for_an_account(self):
