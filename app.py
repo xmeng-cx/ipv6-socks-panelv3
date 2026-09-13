@@ -87,7 +87,7 @@ class Config:
         self.admin_password = os.getenv("ADMIN_PASSWORD", "5201314")
         self.hy2_obfs_password = os.getenv("HY2_OBFS_PASSWORD", "5201314")
         self.initial_proxies = int(os.getenv("INITIAL_PROXIES", "10"))
-        self.base_port = int(os.getenv("BASE_PORT", "20000"))
+        self.base_port = int(os.getenv("BASE_PORT", "20001"))
         self.max_proxies = int(os.getenv("MAX_PROXIES", "100"))
         self.ipv6_interface = os.getenv("IPV6_INTERFACE", "").strip()
         self.ipv6_prefix = os.getenv("IPV6_PREFIX", "").strip()

@@ -61,7 +61,7 @@ WEB_LISTEN=0.0.0.0:8080
 ADMIN_USERNAME=xmeng
 ADMIN_PASSWORD=5201314
 INITIAL_PROXIES=10
-BASE_PORT=20000
+BASE_PORT=20001
 MAX_PROXIES=100
 HY2_OBFS_PASSWORD=5201314
 
@@ -144,12 +144,12 @@ curl -b panel-cookie.txt http://SERVER_IP:8080/api/v1/proxies
 curl 'http://SERVER_IP:8080/api/v1/rotate-ip?username=alice'
 
 # 无需登录：按用户名和端口只更换单条线路
-curl 'http://SERVER_IP:8080/api/v1/rotate-ip?username=alice&port=20000'
-# 等价路径形式：/api/v1/rotate-ip/alice/20000
+curl 'http://SERVER_IP:8080/api/v1/rotate-ip?username=alice&port=20001'
+# 等价路径形式：/api/v1/rotate-ip/alice/20001
 
 # 换 IP / 删除线路
-curl -b panel-cookie.txt -X POST http://SERVER_IP:8080/api/v1/proxies/20000/rotate
-curl -b panel-cookie.txt -X DELETE http://SERVER_IP:8080/api/v1/proxies/20000
+curl -b panel-cookie.txt -X POST http://SERVER_IP:8080/api/v1/proxies/20001/rotate
+curl -b panel-cookie.txt -X DELETE http://SERVER_IP:8080/api/v1/proxies/20001
 ```
 
 ## 数据与安全
