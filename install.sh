@@ -128,6 +128,15 @@ if [ "$ENABLE_HTTPS" = "1" ]; then
       printf '%s=%s\n' "$ENV_KEY" "$ENV_VALUE" >> "$PANEL_INSTALL_DIR/.env"
     fi
   }
+  if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet nginx 2>/dev/null; then
+    echo "正在停止并禁用旧 Nginx，改由 Python 直接提供 HTTPS…"
+    systemctl disable --now nginx
+  fi
+  if ss -lnt | awk '$4 ~ /:80$/ { found=1 } END { exit !found }'; then
+    echo "错误：80 端口仍被其他程序占用：" >&2
+    ss -lntp | awk '$4 ~ /:80$/ { print }' >&2
+    exit 1
+  fi
   ACME_HOME=/root/.acme.sh
   if [ ! -x "$ACME_HOME/acme.sh" ]; then
     echo "正在安装 acme.sh…"
