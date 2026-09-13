@@ -801,7 +801,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         scheme = "https" if forwarded == "https" or isinstance(self.connection, ssl.SSLSocket) else "http"
         return "%s://%s/sub/%s" % (scheme, self.headers.get("Host", "localhost"), token)
 
-    def start_rotate_job(self, owner, proxy_id=None):
+    def start_rotate_job(self, owner, proxy_id=None, wait=False):
         proxies = self.panel.list_for_user(owner)
         if proxy_id:
             proxies = [proxy for proxy in proxies if proxy["id"] == str(proxy_id)]
@@ -816,14 +816,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 job["items"][proxy["id"]] = item
                 try:
                     updated = self.panel.rotate_proxy(owner, proxy["id"])
-                    item.update({"status": "success", "newIpv6": updated["ipv6"]})
+                    item.update({"status": "success", "newIpv6": updated["ipv6"], "verified": True, "verifiedIpv6": updated["ipv6"]})
                     job["succeeded"] += 1
                 except Exception as exc:
-                    item.update({"status": "failed", "error": str(exc)})
+                    item.update({"status": "failed", "verified": False, "error": str(exc)})
                     job["failed"] += 1
                 job["completed"] += 1
             job.update({"status": "completed", "completedAt": utc_now()})
-        threading.Thread(target=rotate_all, daemon=True).start()
+        if wait:
+            rotate_all()
+        else:
+            threading.Thread(target=rotate_all, daemon=True).start()
         return {k: v for k, v in job.items() if k != "owner"}
 
     def do_GET(self):
@@ -876,7 +879,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     raise PanelError("请提供 username", 400, "username_required")
                 if not self.panel.find_user(owner, self.panel.state):
                     raise PanelError("目标账号不存在", 404, "not_found")
-                self.json_response(202, self.start_rotate_job(owner, proxy_id or None)); return
+                self.json_response(200, self.start_rotate_job(owner, proxy_id or None, wait=True)); return
             if path.startswith("/api/v1/jobs/"):
                 user = self.require_user()
                 job = self.panel.jobs.get(path.rsplit("/", 1)[-1]) if user else None

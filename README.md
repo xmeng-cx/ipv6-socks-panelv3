@@ -140,17 +140,19 @@ curl -b panel-cookie.txt -X POST -H 'Content-Type: application/json' \
 # 查看当前账号线路
 curl -b panel-cookie.txt http://SERVER_IP:8080/api/v1/proxies
 
-# 无需登录：按用户名更换全部线路 IP
-curl 'http://SERVER_IP:8080/api/v1/rotate-ip?username=alice'
+# 无需登录：按用户名更换全部线路 IP，等待验证完成后直接返回结果
+curl 'https://panel.example.com/api/v1/rotate-ip?username=alice'
 
-# 无需登录：按用户名和端口只更换单条线路
-curl 'http://SERVER_IP:8080/api/v1/rotate-ip?username=alice&port=20001'
+# 无需登录：按用户名和端口只更换单条线路；线路 ID 就是端口号
+curl 'https://panel.example.com/api/v1/rotate-ip?username=alice&port=20001'
 # 等价路径形式：/api/v1/rotate-ip/alice/20001
 
 # 换 IP / 删除线路
 curl -b panel-cookie.txt -X POST http://SERVER_IP:8080/api/v1/proxies/20001/rotate
 curl -b panel-cookie.txt -X DELETE http://SERVER_IP:8080/api/v1/proxies/20001
 ```
+
+公开 GET 换 IP 接口是同步接口，不需要登录或 Cookie。它会生成新 IPv6、验证该地址的公网出口、重启线路并删除旧地址，全部成功后返回 HTTP 200。成功线路包含 `verified: true`，且 `verifiedIpv6` 与 `newIpv6` 一致；验证失败时返回 `verified: false` 和具体错误，并恢复旧 IPv6。
 
 ## 数据与安全
 

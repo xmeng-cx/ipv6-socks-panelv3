@@ -159,12 +159,11 @@ class PanelPythonTests(unittest.TestCase):
             connection.request("GET", "/api/v1/rotate-ip?username=alice")
             response = connection.getresponse()
             payload = json.loads(response.read())
-            self.assertEqual(response.status, 202)
+            self.assertEqual(response.status, 200)
             self.assertEqual(payload["total"], 1)
-            for _ in range(20):
-                if panel.rotated:
-                    break
-                threading.Event().wait(.01)
+            self.assertEqual(payload["status"], "completed")
+            self.assertTrue(payload["items"]["20000"]["verified"])
+            self.assertEqual(payload["items"]["20000"]["verifiedIpv6"], "2001:db8::2")
             self.assertEqual(panel.rotated, [("alice", "20000")])
 
             panel.rotated.clear()
@@ -172,11 +171,7 @@ class PanelPythonTests(unittest.TestCase):
             connection.request("GET", "/api/v1/rotate-ip?username=alice&port=20000")
             response = connection.getresponse()
             response.read()
-            self.assertEqual(response.status, 202)
-            for _ in range(100):
-                if panel.rotated:
-                    break
-                threading.Event().wait(.01)
+            self.assertEqual(response.status, 200)
             self.assertEqual(panel.rotated, [("alice", "20000")])
         finally:
             server.shutdown()

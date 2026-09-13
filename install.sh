@@ -106,7 +106,6 @@ else
 fi
 mkdir -p data
 chmod 700 data
-chmod +x app.py
 
 sed "s|__INSTALL_DIR__|$PANEL_INSTALL_DIR|g" ipv6-socks-panel.service > /etc/systemd/system/ipv6-socks-panel.service
 systemctl daemon-reload
