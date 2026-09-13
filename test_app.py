@@ -210,6 +210,29 @@ class PanelPythonTests(unittest.TestCase):
         panel.run = lambda *_args, **_kwargs: next(responses)
         panel.add_address(ipaddress.ip_address("2001:db8::2"))
 
+    def test_rotate_hot_replaces_only_one_outbound_without_xray_restart(self):
+        panel = app.Panel.__new__(app.Panel)
+        panel.lock = threading.RLock()
+        panel.state = {"proxies": [{"id": "20001", "owner": "alice", "ipv6": "2001:db8::1"}]}
+        panel.random_ip = lambda: ipaddress.ip_address("2001:db8::2")
+        activated, checked, replaced, deleted, saved, written = [], [], [], [], [], []
+        panel.add_address = activated.append
+        panel.check_egress = checked.append
+        panel.replace_xray_outbound = lambda proxy, old, new: replaced.append((proxy["id"], old, new))
+        panel.delete_address = deleted.append
+        panel.save = lambda: saved.append(True)
+        panel.write_xray_config = lambda: written.append(True)
+
+        result = panel.rotate_proxy("alice", "20001")
+
+        self.assertEqual(result["ipv6"], "2001:db8::2")
+        self.assertEqual(activated, ["2001:db8::2"])
+        self.assertEqual(checked, ["2001:db8::2"])
+        self.assertEqual(replaced, [("20001", "2001:db8::1", "2001:db8::2")])
+        self.assertEqual(deleted, ["2001:db8::1"])
+        self.assertEqual(saved, [True])
+        self.assertEqual(written, [True])
+
     def test_official_tls_certificate_is_reused_by_xray(self):
         with tempfile.TemporaryDirectory() as directory:
             cert = Path(directory, "fullchain.pem")

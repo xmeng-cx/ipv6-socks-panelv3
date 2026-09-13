@@ -152,7 +152,7 @@ curl -b panel-cookie.txt -X POST http://SERVER_IP:8080/api/v1/proxies/20001/rota
 curl -b panel-cookie.txt -X DELETE http://SERVER_IP:8080/api/v1/proxies/20001
 ```
 
-公开 GET 换 IP 接口是同步接口，不需要登录或 Cookie。它会生成新 IPv6、验证该地址的公网出口、重启线路并删除旧地址，全部成功后返回 HTTP 200。成功线路包含 `verified: true`，且 `verifiedIpv6` 与 `newIpv6` 一致；验证失败时返回 `verified: false` 和具体错误，并恢复旧 IPv6。
+公开 GET 换 IP 接口是同步接口，不需要登录或 Cookie。它会生成新 IPv6、验证该地址的公网出口，再通过 Xray HandlerService API 只热替换目标线路的 outbound，不重启 Xray，也不中断其他线路。全部成功后返回 HTTP 200；成功线路包含 `verified: true`，且 `verifiedIpv6` 与 `newIpv6` 一致。验证失败时返回 `verified: false` 和具体错误，并恢复旧 IPv6。
 
 ## 数据与安全
 

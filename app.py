@@ -366,9 +366,52 @@ class Panel:
                     settings["ip"] = udp_ip
                 inbound = {"tag": "socks-" + tag, "listen": self.cfg.socks_listen, "port": proxy["port"], "protocol": "socks", "settings": settings}
             inbounds.append(inbound)
-            outbounds.append({"tag": "egress-" + tag, "protocol": "freedom", "sendThrough": proxy["ipv6"], "settings": {"domainStrategy": "UseIPv6"}})
+            outbounds.append(self.xray_outbound(proxy, proxy["ipv6"]))
             rules.append({"type": "field", "ruleTag": "route-" + tag, "inboundTag": ["socks-" + tag], "outboundTag": "egress-" + tag})
         return {"log": {"loglevel": "warning"}, "api": {"tag": "api", "services": ["HandlerService", "RoutingService"]}, "inbounds": inbounds, "outbounds": outbounds, "routing": {"domainStrategy": "AsIs", "rules": rules}}
+
+    @staticmethod
+    def xray_outbound(proxy, ipv6):
+        return {"tag": "egress-" + str(proxy["id"]), "protocol": "freedom", "sendThrough": ipv6, "settings": {"domainStrategy": "UseIPv6"}}
+
+    def write_xray_config(self):
+        config_path = self.cfg.data_dir / "xray.json"
+        config_path.write_text(json.dumps(self.xray_config(), ensure_ascii=False, indent=2) + "\n", "utf-8")
+        return config_path
+
+    def xray_api_config(self, command, payload):
+        runtime_dir = self.cfg.data_dir / "runtime"
+        runtime_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path = None
+        try:
+            with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=runtime_dir, prefix=command + "-", suffix=".json", delete=False) as handle:
+                json.dump(payload, handle, ensure_ascii=False)
+                handle.write("\n")
+                path = handle.name
+            result = self.run([self.cfg.xray_binary, "api", command, "--server=127.0.0.1:10085", "--timeout=8", path], timeout=10, check=False)
+            if result.returncode:
+                raise RuntimeError("Xray API %s 失败: %s" % (command, (result.stderr or result.stdout).strip()))
+        finally:
+            if path:
+                with contextlib.suppress(FileNotFoundError):
+                    os.unlink(path)
+
+    def xray_api_tags(self, command, *tags):
+        result = self.run([self.cfg.xray_binary, "api", command, "--server=127.0.0.1:10085", "--timeout=8", *tags], timeout=10, check=False)
+        if result.returncode:
+            raise RuntimeError("Xray API %s 失败: %s" % (command, (result.stderr or result.stdout).strip()))
+
+    def replace_xray_outbound(self, proxy, old_ip, new_ip):
+        tag = "egress-" + str(proxy["id"])
+        self.xray_api_tags("rmo", tag)
+        try:
+            self.xray_api_config("ado", {"outbounds": [self.xray_outbound(proxy, new_ip)]})
+        except Exception as error:
+            try:
+                self.xray_api_config("ado", {"outbounds": [self.xray_outbound(proxy, old_ip)]})
+            except Exception as rollback_error:
+                raise RuntimeError("%s；恢复旧出站失败: %s" % (error, rollback_error)) from error
+            raise
 
     def stop_xray(self):
         process, self.xray = self.xray, None
@@ -380,8 +423,7 @@ class Panel:
                 process.kill()
 
     def restart_xray(self):
-        config_path = self.cfg.data_dir / "xray.json"
-        config_path.write_text(json.dumps(self.xray_config(), ensure_ascii=False, indent=2) + "\n", "utf-8")
+        config_path = self.write_xray_config()
         test = self.run([self.cfg.xray_binary, "run", "-test", "-c", str(config_path)], check=False)
         if test.returncode:
             raise RuntimeError("Xray 配置验证失败: " + test.stderr.strip())
@@ -492,19 +534,23 @@ class Panel:
             old = proxy["ipv6"]
             new = str(self.random_ip())
             self.add_address(new)
+            replaced = False
             try:
                 self.check_egress(new)
+                self.replace_xray_outbound(proxy, old, new)
+                replaced = True
                 proxy["ipv6"] = new
                 proxy["lastRotatedAt"] = utc_now()
-                self.restart_xray()
-                self.delete_address(old)
                 self.save()
+                self.write_xray_config()
+                self.delete_address(old)
                 return dict(proxy)
             except Exception:
                 proxy["ipv6"] = old
+                if replaced:
+                    with contextlib.suppress(Exception):
+                        self.replace_xray_outbound(proxy, new, old)
                 self.delete_address(new)
-                with contextlib.suppress(Exception):
-                    self.restart_xray()
                 raise
 
     def add_user(self, username, password):
