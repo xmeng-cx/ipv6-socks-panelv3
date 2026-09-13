@@ -61,6 +61,11 @@ fi
 
 if [ -d "$PANEL_INSTALL_DIR/.git" ]; then
   echo "正在更新已有项目…"
+  if [ -n "$(git -C "$PANEL_INSTALL_DIR" status --porcelain --untracked-files=normal)" ]; then
+    STASH_LABEL="ipv6-panel-auto-backup-$(date +%Y%m%d-%H%M%S)"
+    git -C "$PANEL_INSTALL_DIR" stash push --include-untracked -m "$STASH_LABEL"
+    echo "已将旧代码改动保存到 Git stash：$STASH_LABEL"
+  fi
   git -C "$PANEL_INSTALL_DIR" fetch "$PANEL_REPOSITORY" main
   git -C "$PANEL_INSTALL_DIR" merge --ff-only FETCH_HEAD
 elif [ -e "$PANEL_INSTALL_DIR" ] && [ -n "$(find "$PANEL_INSTALL_DIR" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
