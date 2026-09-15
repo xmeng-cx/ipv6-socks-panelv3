@@ -158,7 +158,7 @@ if [ "$ENABLE_HTTPS" = "1" ]; then
   chmod 644 "$CERT_DIR/fullchain.pem"
   "$ACME_HOME/acme.sh" --upgrade --auto-upgrade
 
-  set_env_value WEB_LISTEN 0.0.0.0:443
+  set_env_value WEB_LISTEN "[::]:443"
   set_env_value ADVERTISE_HOST "$HTTPS_DOMAIN"
   set_env_value TLS_CERT_FILE "$CERT_DIR/fullchain.pem"
   set_env_value TLS_KEY_FILE "$CERT_DIR/privkey.pem"

@@ -72,12 +72,23 @@ def env_seconds(name, default):
     return int(value)
 
 
+def parse_listen(value):
+    value = value.strip()
+    if value.startswith("["):
+        end = value.find("]")
+        if end < 0 or end + 1 >= len(value) or value[end + 1] != ":":
+            raise ValueError("监听地址格式无效")
+        return value[1:end], int(value[end + 2:])
+    host, port = value.rsplit(":", 1)
+    return host, int(port)
+
+
 class Config:
     def __init__(self):
-        self.web_listen = os.getenv("WEB_LISTEN", "0.0.0.0:8080")
+        self.web_listen = os.getenv("WEB_LISTEN", "[::]:8080")
         self.data_dir = Path(os.getenv("DATA_DIR", str(ROOT / "data")))
         self.xray_binary = os.getenv("XRAY_BINARY", "/usr/local/bin/xray")
-        self.socks_listen = os.getenv("SOCKS_LISTEN", "0.0.0.0")
+        self.socks_listen = os.getenv("SOCKS_LISTEN", "::")
         self.socks_udp = env_bool("SOCKS_UDP", True)
         self.udp_advertise_ip = os.getenv("SOCKS_UDP_ADVERTISE_IP", "").strip()
         self.advertise_host = os.getenv("ADVERTISE_HOST", "").strip()
@@ -358,7 +369,7 @@ class Panel:
         for proxy in self.state["proxies"]:
             tag = str(proxy["id"])
             if proxy["protocol"] == "hy2":
-                inbound = {"tag": "socks-" + tag, "listen": "0.0.0.0", "port": proxy["port"], "protocol": "hysteria", "settings": {"version": 2, "users": [{"auth": proxy["password"], "email": proxy["username"]}]}, "streamSettings": {"network": "hysteria", "security": "tls", "tlsSettings": {"alpn": ["h3"], "minVersion": "1.3", "maxVersion": "1.3", "certificates": [{"certificateFile": str(cert), "keyFile": str(key)}]}, "hysteriaSettings": {"version": 2, "auth": proxy["password"], "udpIdleTimeout": 60}, "finalmask": {"udp": [{"type": "salamander", "settings": {"password": self.cfg.hy2_obfs_password}}]}}}
+                inbound = {"tag": "socks-" + tag, "listen": "::", "port": proxy["port"], "protocol": "hysteria", "settings": {"version": 2, "users": [{"auth": proxy["password"], "email": proxy["username"]}]}, "streamSettings": {"network": "hysteria", "security": "tls", "tlsSettings": {"alpn": ["h3"], "minVersion": "1.3", "maxVersion": "1.3", "certificates": [{"certificateFile": str(cert), "keyFile": str(key)}]}, "hysteriaSettings": {"version": 2, "auth": proxy["password"], "udpIdleTimeout": 60}, "finalmask": {"udp": [{"type": "salamander", "settings": {"password": self.cfg.hy2_obfs_password}}]}}}
             else:
                 settings = {"auth": "password", "udp": self.cfg.socks_udp, "users": [{"user": proxy["username"], "pass": proxy["password"]}]}
                 udp_ip = self.cfg.udp_advertise_ip or self.network.get("ipv4")
@@ -1013,14 +1024,24 @@ class Server(http.server.ThreadingHTTPServer):
     allow_reuse_address = True
 
 
+class DualStackServer(Server):
+    address_family = socket.AF_INET6
+
+    def server_bind(self):
+        with contextlib.suppress(OSError):
+            self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        super().server_bind()
+
+
 def main():
     cfg = Config()
     panel = Panel(cfg)
     server = None
     try:
         panel.start()
-        host, port = cfg.web_listen.rsplit(":", 1)
-        server = Server((host, int(port)), Handler)
+        host, port = parse_listen(cfg.web_listen)
+        server_class = DualStackServer if ":" in host else Server
+        server = server_class((host, port), Handler)
         server.panel = panel
         if cfg.tls_enabled:
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)

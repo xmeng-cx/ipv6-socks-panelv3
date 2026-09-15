@@ -57,7 +57,7 @@ curl -fsSL https://raw.githubusercontent.com/xmeng-cx/ipv6-socks-panelv3/main/in
 首次安装会从 `.env.example` 创建 `.env`。常用选项：
 
 ```dotenv
-WEB_LISTEN=0.0.0.0:8080
+WEB_LISTEN=[::]:8080
 ADMIN_USERNAME=xmeng
 ADMIN_PASSWORD=5201314
 INITIAL_PROXIES=10
@@ -72,6 +72,8 @@ IPV6_PREFIX=
 # 客户端连接地址；有域名时建议填写
 ADVERTISE_HOST=
 ```
+
+`[::]` 为 IPv4/IPv6 双栈监听：面板可通过两种协议访问，HY2 和 SOCKS 入站也默认使用 `::` 同时接受 IPv4 与 IPv6 连接。域名需要同时配置 A 和 AAAA 记录，才能让客户端通过两种协议访问。
 
 配置修改后执行：
 

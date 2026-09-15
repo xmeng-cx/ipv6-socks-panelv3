@@ -63,6 +63,11 @@ class HTTPPanelStub:
 
 
 class PanelPythonTests(unittest.TestCase):
+    def test_ipv4_and_ipv6_listen_addresses_are_parsed(self):
+        self.assertEqual(app.parse_listen("0.0.0.0:8080"), ("0.0.0.0", 8080))
+        self.assertEqual(app.parse_listen("[::]:443"), ("::", 443))
+        self.assertEqual(app.parse_listen("[2001:db8::1]:8443"), ("2001:db8::1", 8443))
+
     def test_state_migration_and_authentication(self):
         with tempfile.TemporaryDirectory() as directory:
             user = app.new_user("xmeng", "5201314", "admin")
