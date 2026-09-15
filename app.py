@@ -419,7 +419,7 @@ class Panel:
                 hy2_listen = self.cfg.hy2_listen or advertised_ip or self.network.get("ipv6") or "::"
                 listeners = [hy2_listen]
                 with contextlib.suppress(ValueError):
-                    if ipaddress.ip_address(hy2_listen).version == 6 and self.network.get("ipv4"):
+                    if ipaddress.ip_address(hy2_listen).version == 6:
                         listeners.append("0.0.0.0")
                 inbound_tags = []
                 for index, listener in enumerate(dict.fromkeys(listeners)):
