@@ -330,6 +330,11 @@ class Panel:
                 dad_failed = bool(item.get("dadfailed")) or "dadfailed" in flags
                 if dad_failed:
                     raise RuntimeError("IPv6 %s 重复地址检测失败" % ip)
+                if result.returncode and tentative:
+                    # The address already belongs to this panel and is being
+                    # restored during service startup. Let kernel DAD finish in
+                    # the background instead of failing the entire panel start.
+                    return
                 if not tentative:
                     return
             time.sleep(.15)

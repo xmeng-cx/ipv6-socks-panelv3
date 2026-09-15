@@ -221,7 +221,7 @@ class PanelPythonTests(unittest.TestCase):
         panel.network = {"interface": "eth0"}
         responses = iter([
             SimpleNamespace(returncode=2, stdout="", stderr="Error: ipv6: address already assigned."),
-            SimpleNamespace(returncode=0, stdout=json.dumps([{"addr_info": [{"local": "2001:db8::2", "family": "inet6"}]}]), stderr=""),
+            SimpleNamespace(returncode=0, stdout=json.dumps([{"addr_info": [{"local": "2001:db8::2", "family": "inet6", "flags": ["tentative"]}]}]), stderr=""),
         ])
         panel.run = lambda *_args, **_kwargs: next(responses)
         panel.add_address(ipaddress.ip_address("2001:db8::2"))
