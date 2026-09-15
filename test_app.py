@@ -122,6 +122,8 @@ class PanelPythonTests(unittest.TestCase):
         self.assertIn("IP-CIDR,192.0.2.10/32,DIRECT,no-resolve", config)
         self.assertIn("IP-CIDR6,fe80::/10,DIRECT,no-resolve", config)
         self.assertIn("DOMAIN,www.meiguodizhi.com,DIRECT", config)
+        self.assertIn('url: "https://www.gstatic.com/generate_204"', config)
+        self.assertNotIn("2001:67c:1898:11::46", config)
         self.assertTrue(config.rstrip().endswith("MATCH,全局代理"))
 
     def test_only_admin_can_create_lines_for_an_account(self):

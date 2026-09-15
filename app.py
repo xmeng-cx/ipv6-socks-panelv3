@@ -850,7 +850,7 @@ def mihomo_config(proxies, server, obfs_password, direct_rules, tls_verified=Fal
     if names:
         lines.append('      - "自动选择"')
     lines += ['  - name: "自动选择"', "    type: url-test", "    proxies:"] + ["      - " + yaml_quote(n) for n in group_names]
-    lines += ['    url: "http://[2001:67c:1898:11::46]/"', "    interval: 300", "    tolerance: 100", "    lazy: true"]
+    lines += ['    url: "https://www.gstatic.com/generate_204"', "    interval: 300", "    tolerance: 100", "    lazy: true"]
     built_in_direct_rules = [
         "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
         "100.64.0.0/10", "169.254.0.0/16", "::1/128", "fc00::/7", "fe80::/10",
