@@ -27,16 +27,17 @@ function escapeText(value) {
 }
 
 function connectionURI(proxy) {
-  const host = system?.advertiseHost || location.hostname;
+  let host = system?.advertiseHost || location.hostname;
+  if (host.startsWith("[") && host.endsWith("]")) host = host.slice(1, -1);
+  const endpointHost = host.includes(":") ? `[${host}]` : host;
   if (proxy.protocol === "hy2") {
-    const endpointHost = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
     const obfsPassword = system.hy2ObfsPassword;
     const finalMask = {udp:[{type:"salamander",settings:{password:obfsPassword}}]};
     const params = new URLSearchParams({security:"tls",fp:"chrome",alpn:"h3,h2,http/1.1",sni:host,obfs:"salamander","obfs-password":obfsPassword,fm:JSON.stringify(finalMask)});
     if (!system.tlsVerified) params.set("insecure", "1");
     return `hysteria2://${encodeURIComponent(proxy.password)}@${endpointHost}:${proxy.port}?${params.toString()}#HY2-${proxy.port}`;
   }
-  return `socks5://${encodeURIComponent(proxy.username)}:${encodeURIComponent(proxy.password)}@${host}:${proxy.port}`;
+  return `socks5://${encodeURIComponent(proxy.username)}:${encodeURIComponent(proxy.password)}@${endpointHost}:${proxy.port}`;
 }
 
 async function copyProxy(proxy) {

@@ -83,6 +83,21 @@ def parse_listen(value):
     return host, int(port)
 
 
+def host_without_port(value):
+    value = str(value or "").strip()
+    if value.startswith("["):
+        end = value.find("]")
+        if end > 0:
+            return value[1:end]
+    with contextlib.suppress(ValueError):
+        return str(ipaddress.ip_address(value))
+    if value.count(":") == 1:
+        host, port = value.rsplit(":", 1)
+        if port.isdigit():
+            return host
+    return value
+
+
 class Config:
     def __init__(self):
         self.web_listen = os.getenv("WEB_LISTEN", "[::]:8080")
@@ -348,7 +363,7 @@ class Panel:
         if cert.exists() and key.exists():
             return cert, key
         tls_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        host = self.cfg.advertise_host or self.network.get("ipv4") or "localhost"
+        host = host_without_port(self.cfg.advertise_host or self.network.get("ipv4") or "localhost")
         san = "IP:%s" % host if self._is_ip(host) else "DNS:%s" % host
         self.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "3650", "-subj", "/CN=" + host, "-addext", "subjectAltName=" + san, "-keyout", str(key), "-out", str(cert)], timeout=30)
         os.chmod(key, 0o600)
@@ -900,7 +915,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if not user:
                     self.send_error(404)
                     return
-                host = self.panel.cfg.advertise_host or self.headers.get("Host", "localhost").split(":", 1)[0]
+                host = host_without_port(self.panel.cfg.advertise_host or self.headers.get("Host", "localhost"))
                 body = mihomo_config(self.panel.list_for_user(user["username"]), host, self.panel.cfg.hy2_obfs_password, self.panel.state["directRules"], self.panel.cfg.tls_enabled).encode()
                 self.send_response(200); self.security_headers(); self.send_header("Content-Type", "text/yaml; charset=utf-8"); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
             if path == "/api/v1/auth/me":

@@ -68,6 +68,17 @@ class PanelPythonTests(unittest.TestCase):
         self.assertEqual(app.parse_listen("[::]:443"), ("::", 443))
         self.assertEqual(app.parse_listen("[2001:db8::1]:8443"), ("2001:db8::1", 8443))
 
+    def test_ipv6_http_host_is_not_cut_at_the_first_colon(self):
+        self.assertEqual(app.host_without_port("[2602:1234:abcd::10]:8080"), "2602:1234:abcd::10")
+        self.assertEqual(app.host_without_port("2602:1234:abcd::10"), "2602:1234:abcd::10")
+        config = app.mihomo_config(
+            [{"protocol": "hy2", "port": 20001, "username": "alice", "password": "secret"}],
+            app.host_without_port("[2602:1234:abcd::10]:8080"), "5201314", [], False,
+        )
+        self.assertIn('server: "2602:1234:abcd::10"', config)
+        self.assertIn('sni: "2602:1234:abcd::10"', config)
+        self.assertNotIn('server: "[2602"', config)
+
     def test_state_migration_and_authentication(self):
         with tempfile.TemporaryDirectory() as directory:
             user = app.new_user("xmeng", "5201314", "admin")
