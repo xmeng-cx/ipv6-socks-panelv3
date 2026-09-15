@@ -6,7 +6,7 @@
 
 - 自动识别 IPv6 默认路由、网卡和公网前缀，也可由管理员修改。
 - 线路 ID 等于端口号，新增协议默认 Hysteria2。
-- HY2 监听 `0.0.0.0`，使用 TLS、Salamander 与独立账号密码。
+- HY2 同时支持 IPv4 与 IPv6 入站，使用 TLS、Salamander 与独立账号密码；多 IPv6 主机会自动固定稳定入口，避免错误源地址回包。
 - 默认管理员：`xmeng` / `5201314`，登录 Cookie 有效期 90 天。
 - 管理员可添加/删除用户；新用户默认创建 10 条 HY2 线路。
 - 只有管理员可新增线路，可选择目标账号、协议和数量。
@@ -19,13 +19,21 @@
 
 - Debian、Ubuntu、Armbian 或 Alpine Linux。
 - root 权限。
-- 主机拥有可自由添加地址的公网 IPv6 前缀（通常为 `/64`）。
+- 主机拥有可自由添加地址的公网 IPv6 前缀（例如 `/48` 或 `/64`）。
 - 上级路由器/运营商允许该前缀内的地址正常出站。
 
 ## 一键安装
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/xmeng-cx/ipv6-socks-panelv3/main/install.sh | sh
+```
+
+安装时会提示填写线路 IPv6 前缀，例如 `2001:470:846a::/48`。填写后会自动保存到 `.env`；直接回车留空则自动识别。重复安装升级时，留空不会覆盖已有前缀。
+
+无人值守安装也可以直接指定前缀：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/xmeng-cx/ipv6-socks-panelv3/main/install.sh | sh -s -- --ipv6-prefix 2001:470:846a::/48
 ```
 
 安装时可选择开启 HTTPS，输入已解析到服务器的域名后，脚本会通过 `acme.sh` 自动申请 Let's Encrypt 免费证书并配置续期，无需 Nginx。Python 面板直接提供 HTTPS，所有 HY2 入站也共用这张正式证书。也可无交互执行：

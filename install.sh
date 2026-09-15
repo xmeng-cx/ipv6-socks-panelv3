@@ -7,6 +7,7 @@ XRAY_VERSION="${XRAY_VERSION:-v26.5.9}"
 ENABLE_HTTPS="${ENABLE_HTTPS:-}"
 HTTPS_DOMAIN="${HTTPS_DOMAIN:-}"
 HTTPS_EMAIL="${HTTPS_EMAIL:-}"
+INSTALL_IPV6_PREFIX="${PANEL_IPV6_PREFIX:-}"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -18,6 +19,11 @@ while [ "$#" -gt 0 ]; do
       if [ "$#" -gt 0 ] && [ "${1#--}" = "$1" ]; then HTTPS_EMAIL="$1"; shift; fi
       ;;
     --no-https) ENABLE_HTTPS=0; shift ;;
+    --ipv6-prefix)
+      [ "$#" -ge 2 ] || { echo "错误：--ipv6-prefix 后必须提供 IPv6 前缀。" >&2; exit 1; }
+      INSTALL_IPV6_PREFIX="$2"
+      shift 2
+      ;;
     *) echo "错误：未知参数 $1" >&2; exit 1 ;;
   esac
 done
@@ -25,6 +31,11 @@ done
 if [ "$(id -u)" -ne 0 ]; then
   echo "错误：请使用 root 执行安装命令。" >&2
   exit 1
+fi
+
+if [ -z "$INSTALL_IPV6_PREFIX" ] && [ -r /dev/tty ]; then
+  printf '请输入线路 IPv6 前缀（例如 2001:470:846a::/48，留空自动识别）: ' >/dev/tty
+  IFS= read -r INSTALL_IPV6_PREFIX </dev/tty || true
 fi
 
 if [ -z "$ENABLE_HTTPS" ]; then
@@ -57,6 +68,13 @@ elif command -v apk >/dev/null 2>&1; then
 else
   echo "错误：仅支持使用 apt 或 apk 的 Linux 系统。" >&2
   exit 1
+fi
+
+if [ -n "$INSTALL_IPV6_PREFIX" ]; then
+  if ! INSTALL_IPV6_PREFIX="$(python3 -c 'import ipaddress,sys; n=ipaddress.ip_network(sys.argv[1], strict=False); assert n.version == 6 and n.prefixlen < 128; print(n)' "$INSTALL_IPV6_PREFIX" 2>/dev/null)"; then
+    echo "错误：IPv6 前缀无效，请填写类似 2001:470:846a::/48 的网段。" >&2
+    exit 1
+  fi
 fi
 
 if [ -d "$PANEL_INSTALL_DIR/.git" ]; then
@@ -104,6 +122,23 @@ if [ ! -f .env ]; then
 else
   echo "保留已有 .env 配置。"
 fi
+
+set_env_value() {
+  ENV_KEY="$1"
+  ENV_VALUE="$2"
+  if grep -q "^${ENV_KEY}=" "$PANEL_INSTALL_DIR/.env"; then
+    sed -i "s|^${ENV_KEY}=.*|${ENV_KEY}=${ENV_VALUE}|" "$PANEL_INSTALL_DIR/.env"
+  else
+    printf '%s=%s\n' "$ENV_KEY" "$ENV_VALUE" >> "$PANEL_INSTALL_DIR/.env"
+  fi
+}
+
+if [ -n "$INSTALL_IPV6_PREFIX" ]; then
+  set_env_value IPV6_PREFIX "$INSTALL_IPV6_PREFIX"
+  echo "已配置线路 IPv6 前缀：$INSTALL_IPV6_PREFIX"
+else
+  echo "未指定线路 IPv6 前缀，将由面板自动识别（已有配置保持不变）。"
+fi
 mkdir -p data
 chmod 700 data
 
@@ -118,15 +153,6 @@ fi
 systemctl enable --now ipv6-socks-panel
 
 if [ "$ENABLE_HTTPS" = "1" ]; then
-  set_env_value() {
-    ENV_KEY="$1"
-    ENV_VALUE="$2"
-    if grep -q "^${ENV_KEY}=" "$PANEL_INSTALL_DIR/.env"; then
-      sed -i "s|^${ENV_KEY}=.*|${ENV_KEY}=${ENV_VALUE}|" "$PANEL_INSTALL_DIR/.env"
-    else
-      printf '%s=%s\n' "$ENV_KEY" "$ENV_VALUE" >> "$PANEL_INSTALL_DIR/.env"
-    fi
-  }
   if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet nginx 2>/dev/null; then
     echo "正在停止并禁用旧 Nginx，改由 Python 直接提供 HTTPS…"
     systemctl disable --now nginx
