@@ -319,7 +319,10 @@ class Panel:
 
     def add_address(self, ip):
         cidr = "%s/%d" % (ip, self.prefix.prefixlen)
-        result = self.run(["ip", "-6", "addr", "add", cidr, "dev", self.network["interface"], "noprefixroute"], check=False)
+        # These addresses are generated randomly from a routed prefix. Skipping
+        # kernel DAD avoids an unnecessary ~1 second pause on every rotation;
+        # the external egress check below still verifies the address before use.
+        result = self.run(["ip", "-6", "addr", "add", cidr, "dev", self.network["interface"], "noprefixroute", "nodad"], check=False)
         deadline = time.time() + self.cfg.dad_timeout
         while time.time() < deadline:
             data = json.loads(self.run(["ip", "-j", "-6", "addr", "show", "dev", self.network["interface"]]).stdout or "[]")
