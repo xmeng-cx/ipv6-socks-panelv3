@@ -351,9 +351,19 @@ class Panel:
         self.run(["ip", "-6", "addr", "del", cidr, "dev", self.network["interface"]], check=False)
 
     def check_egress(self, ip):
-        result = self.run(["curl", "-6", "--interface", str(ip), "-fsS", "--max-time", str(self.cfg.ip_check_timeout), self.cfg.ip_check_url], timeout=self.cfg.ip_check_timeout + 3, check=False)
+        # A burst of newly activated source addresses can briefly time out at
+        # public IP-check services. Retry each line independently; this keeps
+        # bulk rotation fully parallel without accepting an unverified address.
+        attempt_timeout = min(self.cfg.ip_check_timeout, 4)
+        result = None
+        for attempt in range(3):
+            result = self.run(["curl", "-6", "--interface", str(ip), "-fsS", "--max-time", str(attempt_timeout), self.cfg.ip_check_url], timeout=attempt_timeout + 3, check=False)
+            if not result.returncode:
+                break
+            if attempt < 2:
+                time.sleep(.25 * (attempt + 1))
         if result.returncode:
-            raise RuntimeError("IPv6 出站验证失败: %s" % result.stderr.strip())
+            raise RuntimeError("IPv6 出站验证失败（已重试 3 次）: %s" % result.stderr.strip())
         observed = result.stdout.strip()
         try:
             payload = json.loads(observed)
