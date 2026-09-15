@@ -3,6 +3,7 @@ import http.client
 import ipaddress
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -189,6 +190,45 @@ class PanelPythonTests(unittest.TestCase):
             response.read()
             self.assertEqual(response.status, 200)
             self.assertEqual(panel.rotated, [("alice", "20000")])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
+    def test_rotate_all_uses_one_concurrent_worker_per_line(self):
+        panel = HTTPPanelStub()
+        lines = [
+            {"id": str(20000 + index), "port": 20000 + index, "ipv6": "2001:db8::%d" % (index + 1), "owner": "alice", "protocol": "hy2"}
+            for index in range(6)
+        ]
+        panel.list_for_user = lambda _username: lines
+        guard = threading.Lock()
+        active = 0
+        peak = 0
+
+        def rotate(_username, proxy_id):
+            nonlocal active, peak
+            with guard:
+                active += 1
+                peak = max(peak, active)
+            time.sleep(.1)
+            with guard:
+                active -= 1
+            return {"id": proxy_id, "ipv6": "2001:db8:1::" + proxy_id}
+
+        panel.rotate_proxy = rotate
+        server = app.Server(("127.0.0.1", 0), app.Handler)
+        server.panel = panel
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
+            connection.request("GET", "/api/v1/rotate-ip?username=alice")
+            response = connection.getresponse()
+            payload = json.loads(response.read())
+            self.assertEqual(response.status, 200)
+            self.assertEqual(payload["succeeded"], len(lines))
+            self.assertEqual(peak, len(lines))
         finally:
             server.shutdown()
             server.server_close()

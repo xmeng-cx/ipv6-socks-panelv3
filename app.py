@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import base64
+import concurrent.futures
 import contextlib
 import hashlib
 import hmac
@@ -163,6 +164,8 @@ class Panel:
     def __init__(self, cfg):
         self.cfg = cfg
         self.lock = threading.RLock()
+        self.proxy_locks = {}
+        self.rotating_ips = set()
         self.jobs = {}
         self.xray = None
         self.stopping = threading.Event()
@@ -559,30 +562,45 @@ class Panel:
 
     def rotate_proxy(self, username, proxy_id):
         with self.lock:
-            proxy = next((p for p in self.state["proxies"] if p["id"] == proxy_id and p["owner"] == username), None)
-            if not proxy:
-                raise PanelError("线路不存在", 404, "not_found")
-            old = proxy["ipv6"]
-            new = str(self.random_ip())
-            self.add_address(new)
+            if not hasattr(self, "proxy_locks"):
+                self.proxy_locks = {}
+            if not hasattr(self, "rotating_ips"):
+                self.rotating_ips = set()
+            line_lock = self.proxy_locks.setdefault((username, str(proxy_id)), threading.Lock())
+        with line_lock:
+            with self.lock:
+                proxy = next((p for p in self.state["proxies"] if p["id"] == proxy_id and p["owner"] == username), None)
+                if not proxy:
+                    raise PanelError("线路不存在", 404, "not_found")
+                old = proxy["ipv6"]
+                new = str(self.random_ip())
+                while new in self.rotating_ips:
+                    new = str(self.random_ip())
+                self.rotating_ips.add(new)
             replaced = False
             try:
+                self.add_address(new)
                 self.check_egress(new)
                 self.replace_xray_outbound(proxy, old, new)
                 replaced = True
-                proxy["ipv6"] = new
-                proxy["lastRotatedAt"] = utc_now()
-                self.save()
-                self.write_xray_config()
+                with self.lock:
+                    proxy["ipv6"] = new
+                    proxy["lastRotatedAt"] = utc_now()
+                    self.save()
+                    self.write_xray_config()
                 self.delete_address(old)
                 return dict(proxy)
             except Exception:
-                proxy["ipv6"] = old
+                with self.lock:
+                    proxy["ipv6"] = old
                 if replaced:
                     with contextlib.suppress(Exception):
                         self.replace_xray_outbound(proxy, new, old)
                 self.delete_address(new)
                 raise
+            finally:
+                with self.lock:
+                    self.rotating_ips.discard(new)
 
     def add_user(self, username, password):
         with self.lock:
@@ -888,17 +906,31 @@ class Handler(http.server.BaseHTTPRequestHandler):
         job = {"id": job_id, "status": "running", "total": len(proxies), "completed": 0, "succeeded": 0, "failed": 0, "createdAt": utc_now(), "items": {}, "owner": owner}
         self.panel.jobs[job_id] = job
         def rotate_all():
+            job_lock = threading.Lock()
             for proxy in proxies:
                 item = {"proxyId": proxy["id"], "status": "running", "oldIpv6": proxy["ipv6"]}
                 job["items"][proxy["id"]] = item
+
+            def rotate_one(proxy):
+                item = job["items"][proxy["id"]]
                 try:
                     updated = self.panel.rotate_proxy(owner, proxy["id"])
                     item.update({"status": "success", "newIpv6": updated["ipv6"], "verified": True, "verifiedIpv6": updated["ipv6"]})
-                    job["succeeded"] += 1
+                    succeeded = True
                 except Exception as exc:
                     item.update({"status": "failed", "verified": False, "error": str(exc)})
-                    job["failed"] += 1
-                job["completed"] += 1
+                    succeeded = False
+                with job_lock:
+                    job["succeeded" if succeeded else "failed"] += 1
+                    job["completed"] += 1
+
+            if proxies:
+                # One worker per line: all IPv6 additions, egress checks and Xray
+                # outbound hot swaps run concurrently instead of serially.
+                with concurrent.futures.ThreadPoolExecutor(max_workers=len(proxies), thread_name_prefix="rotate") as executor:
+                    futures = [executor.submit(rotate_one, proxy) for proxy in proxies]
+                    for future in futures:
+                        future.result()
             job.update({"status": "completed", "completedAt": utc_now()})
         if wait:
             rotate_all()
