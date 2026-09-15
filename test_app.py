@@ -298,5 +298,21 @@ class PanelPythonTests(unittest.TestCase):
             panel = app.Panel.__new__(app.Panel)
             panel.cfg = SimpleNamespace(tls_enabled=True, tls_cert_file=str(cert), tls_key_file=str(key))
             self.assertEqual(panel.ensure_certificate(), (cert, key))
+
+    def test_hy2_uses_fixed_ipv6_and_separate_ipv4_inbounds(self):
+        panel = app.Panel.__new__(app.Panel)
+        panel.cfg = SimpleNamespace(
+            advertise_host="2001:db8::10", hy2_listen="", hy2_obfs_password="secret",
+            socks_udp=True, socks_listen="::", udp_advertise_ip="",
+        )
+        panel.network = {"ipv4": "192.0.2.10", "ipv6": "2001:db8::10"}
+        panel.state = {"proxies": [{"id": "20001", "port": 20001, "protocol": "hy2", "username": "alice", "password": "secret", "ipv6": "2001:db8:1::1"}]}
+        panel.ensure_certificate = lambda: (Path("cert.pem"), Path("key.pem"))
+
+        config = panel.xray_config()
+        listeners = {(item["tag"], item["listen"]) for item in config["inbounds"] if item["protocol"] == "hysteria"}
+        self.assertEqual(listeners, {("socks-20001", "2001:db8::10"), ("socks-20001-ipv4", "0.0.0.0")})
+        route = next(rule for rule in config["routing"]["rules"] if rule.get("ruleTag") == "route-20001")
+        self.assertEqual(route["inboundTag"], ["socks-20001", "socks-20001-ipv4"])
 if __name__ == "__main__":
     unittest.main()

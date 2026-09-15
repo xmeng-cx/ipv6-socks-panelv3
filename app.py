@@ -113,6 +113,7 @@ class Config:
         self.admin_username = os.getenv("ADMIN_USERNAME", "xmeng")
         self.admin_password = os.getenv("ADMIN_PASSWORD", "5201314")
         self.hy2_obfs_password = os.getenv("HY2_OBFS_PASSWORD", "5201314")
+        self.hy2_listen = os.getenv("HY2_LISTEN", "").strip()
         self.initial_proxies = int(os.getenv("INITIAL_PROXIES", "10"))
         self.base_port = int(os.getenv("BASE_PORT", "20001"))
         self.max_proxies = int(os.getenv("MAX_PROXIES", "100"))
@@ -252,6 +253,7 @@ class Panel:
         addresses = json.loads(self.run(["ip", "-j", "addr", "show", "dev", iface]).stdout or "[]")
         addr_info = addresses[0].get("addr_info", []) if addresses else []
         candidates = []
+        global_addresses = []
         ipv4 = ""
         for item in addr_info:
             local = item.get("local", "")
@@ -263,6 +265,9 @@ class Panel:
             if ip.is_private or ip.is_link_local or ip.is_loopback or ip.is_multicast:
                 continue
             plen = int(item.get("prefixlen", 128))
+            flags = {str(flag).lower() for flag in item.get("flags", [])}
+            managed = bool(item.get("noprefixroute")) or "noprefixroute" in flags
+            global_addresses.append((str(ip), managed))
             if plen < 128:
                 candidates.append(ipaddress.ip_network("%s/%d" % (local, plen), strict=False))
         if prefix_override.strip():
@@ -275,7 +280,11 @@ class Panel:
                 raise RuntimeError("网卡 %s 没有可用的公网 IPv6 前缀" % iface)
             preferred = ipaddress.ip_address(preferred_source) if preferred_source else None
             prefix = next((n for n in unique if preferred and preferred in n), unique[0])
-        return {"interface": iface, "prefix": str(prefix), "ipv4": ipv4}, prefix
+        # Panel-managed addresses use noprefixroute. Prefer a system/tunnel
+        # address as the stable HY2 ingress on hosts with an IPv6 address pool.
+        stable = [address for address, managed in global_addresses if not managed]
+        ingress_ipv6 = stable[0] if stable else preferred_source
+        return {"interface": iface, "prefix": str(prefix), "ipv4": ipv4, "ipv6": ingress_ipv6}, prefix
 
     def start(self):
         iface = self.state.get("ipv6Interface") or self.cfg.ipv6_interface
@@ -405,16 +414,29 @@ class Panel:
         for proxy in self.state["proxies"]:
             tag = str(proxy["id"])
             if proxy["protocol"] == "hy2":
-                inbound = {"tag": "socks-" + tag, "listen": "::", "port": proxy["port"], "protocol": "hysteria", "settings": {"version": 2, "users": [{"auth": proxy["password"], "email": proxy["username"]}]}, "streamSettings": {"network": "hysteria", "security": "tls", "tlsSettings": {"alpn": ["h3"], "minVersion": "1.3", "maxVersion": "1.3", "certificates": [{"certificateFile": str(cert), "keyFile": str(key)}]}, "hysteriaSettings": {"version": 2, "auth": proxy["password"], "udpIdleTimeout": 60}, "finalmask": {"udp": [{"type": "salamander", "settings": {"password": self.cfg.hy2_obfs_password}}]}}}
+                advertised = host_without_port(self.cfg.advertise_host)
+                advertised_ip = advertised if self._is_ip(advertised) else ""
+                hy2_listen = self.cfg.hy2_listen or advertised_ip or self.network.get("ipv6") or "::"
+                listeners = [hy2_listen]
+                with contextlib.suppress(ValueError):
+                    if ipaddress.ip_address(hy2_listen).version == 6 and self.network.get("ipv4"):
+                        listeners.append("0.0.0.0")
+                inbound_tags = []
+                for index, listener in enumerate(dict.fromkeys(listeners)):
+                    inbound_tag = "socks-" + tag + ("-ipv4" if index else "")
+                    inbound = {"tag": inbound_tag, "listen": listener, "port": proxy["port"], "protocol": "hysteria", "settings": {"version": 2, "users": [{"auth": proxy["password"], "email": proxy["username"]}]}, "streamSettings": {"network": "hysteria", "security": "tls", "tlsSettings": {"alpn": ["h3"], "minVersion": "1.3", "maxVersion": "1.3", "certificates": [{"certificateFile": str(cert), "keyFile": str(key)}]}, "hysteriaSettings": {"version": 2, "auth": proxy["password"], "udpIdleTimeout": 60}, "finalmask": {"udp": [{"type": "salamander", "settings": {"password": self.cfg.hy2_obfs_password}}]}}}
+                    inbounds.append(inbound)
+                    inbound_tags.append(inbound_tag)
             else:
                 settings = {"auth": "password", "udp": self.cfg.socks_udp, "users": [{"user": proxy["username"], "pass": proxy["password"]}]}
                 udp_ip = self.cfg.udp_advertise_ip or self.network.get("ipv4")
                 if self.cfg.socks_udp and udp_ip:
                     settings["ip"] = udp_ip
                 inbound = {"tag": "socks-" + tag, "listen": self.cfg.socks_listen, "port": proxy["port"], "protocol": "socks", "settings": settings}
-            inbounds.append(inbound)
+                inbounds.append(inbound)
+                inbound_tags = ["socks-" + tag]
             outbounds.append(self.xray_outbound(proxy, proxy["ipv6"]))
-            rules.append({"type": "field", "ruleTag": "route-" + tag, "inboundTag": ["socks-" + tag], "outboundTag": "egress-" + tag})
+            rules.append({"type": "field", "ruleTag": "route-" + tag, "inboundTag": inbound_tags, "outboundTag": "egress-" + tag})
         return {"log": {"loglevel": "warning"}, "api": {"tag": "api", "services": ["HandlerService", "RoutingService"]}, "inbounds": inbounds, "outbounds": outbounds, "routing": {"domainStrategy": "AsIs", "rules": rules}}
 
     @staticmethod
