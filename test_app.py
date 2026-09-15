@@ -114,6 +114,7 @@ class PanelPythonTests(unittest.TestCase):
         self.assertIn("external-ui: /data/adb/mihomo/ui", config)
         self.assertIn("device: mihomo", config)
         self.assertIn("strict-route: true", config)
+        self.assertIn('route-exclude-address:\n    - "192.0.2.10/32"', config)
         self.assertIn('name: \"US-HY20000\"', config)
         self.assertIn("type: hysteria2", config)
         self.assertIn("skip-cert-verify: false", config)
@@ -125,6 +126,11 @@ class PanelPythonTests(unittest.TestCase):
         self.assertIn('url: "https://www.gstatic.com/generate_204"', config)
         self.assertNotIn("2001:67c:1898:11::46", config)
         self.assertTrue(config.rstrip().endswith("MATCH,全局代理"))
+
+        ipv6_config = app.mihomo_config([
+            {"protocol": "hy2", "port": 20001, "username": "alice", "password": "secret"}
+        ], "2001:db8::10", "5201314", [], False)
+        self.assertIn('route-exclude-address:\n    - "2001:db8::10/128"', ipv6_config)
 
     def test_only_admin_can_create_lines_for_an_account(self):
         panel = HTTPPanelStub()

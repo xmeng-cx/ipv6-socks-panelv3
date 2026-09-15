@@ -834,6 +834,11 @@ def mihomo_config(proxies, server, obfs_password, direct_rules, tls_verified=Fal
         "    - 119.29.29.29",
         "proxies:",
     ]
+    with contextlib.suppress(ValueError):
+        ingress = ipaddress.ip_address(server)
+        ingress_cidr = "%s/%d" % (ingress, 128 if ingress.version == 6 else 32)
+        dns_index = lines.index("dns:")
+        lines[dns_index:dns_index] = ["  route-exclude-address:", "    - " + yaml_quote(ingress_cidr)]
     names = []
     if not proxies:
         lines[-1] += " []"
