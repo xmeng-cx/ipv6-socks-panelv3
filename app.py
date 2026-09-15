@@ -987,7 +987,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if not user:
                     self.send_error(404)
                     return
-                host = host_without_port(self.panel.cfg.advertise_host or self.headers.get("Host", "localhost"))
+                # Export the same host the user used to request the subscription:
+                # IPv4 access yields IPv4 nodes, IPv6 yields IPv6, and a domain
+                # yields domain nodes. HY2_LISTEN is independent from this.
+                host = host_without_port(self.headers.get("Host", "localhost"))
                 body = mihomo_config(self.panel.list_for_user(user["username"]), host, self.panel.cfg.hy2_obfs_password, self.panel.state["directRules"], self.panel.cfg.tls_enabled).encode()
                 self.send_response(200); self.security_headers(); self.send_header("Content-Type", "text/yaml; charset=utf-8"); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
             if path == "/api/v1/auth/me":

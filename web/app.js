@@ -27,7 +27,9 @@ function escapeText(value) {
 }
 
 function connectionURI(proxy) {
-  let host = system?.advertiseHost || location.hostname;
+  // Copy exactly the address used to open the panel. The fixed HY2 listener
+  // controls server-side reply routing and must not force the exported host.
+  let host = location.hostname;
   if (host.startsWith("[") && host.endsWith("]")) host = host.slice(1, -1);
   const endpointHost = host.includes(":") ? `[${host}]` : host;
   if (proxy.protocol === "hy2") {

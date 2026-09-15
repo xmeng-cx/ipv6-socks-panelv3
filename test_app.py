@@ -195,6 +195,29 @@ class PanelPythonTests(unittest.TestCase):
             server.server_close()
             thread.join(timeout=2)
 
+    def test_subscription_exports_the_requested_ipv4_not_advertise_ipv6(self):
+        panel = HTTPPanelStub()
+        panel.cfg.advertise_host = "2001:db8::10"
+        panel.list_for_user = lambda username: [{"id": "20000", "port": 20000, "ipv6": "2001:db8::1", "owner": username, "protocol": "hy2", "username": username, "password": "alice123"}]
+        token = next(user["subscriptionToken"] for user in panel.state["users"] if user["username"] == "alice")
+        server = app.Server(("127.0.0.1", 0), app.Handler)
+        server.panel = panel
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
+            connection.request("GET", "/sub/" + token, headers={"Host": "216.195.211.112:8080"})
+            response = connection.getresponse()
+            payload = response.read().decode()
+            self.assertEqual(response.status, 200)
+            self.assertIn('server: "216.195.211.112"', payload)
+            self.assertIn('sni: "216.195.211.112"', payload)
+            self.assertNotIn('server: "2001:db8::10"', payload)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
     def test_rotate_all_uses_one_concurrent_worker_per_line(self):
         panel = HTTPPanelStub()
         lines = [
