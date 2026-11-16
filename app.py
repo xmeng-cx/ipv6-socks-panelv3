@@ -457,6 +457,7 @@ class Panel:
                 for index, listener in enumerate(dict.fromkeys(listeners)):
                     inbound_tag = "socks-" + tag + ("-ipv4" if index else "")
                     inbound = {"tag": inbound_tag, "listen": listener, "port": proxy["port"], "protocol": "hysteria", "settings": {"version": 2, "users": [{"auth": proxy["password"], "email": proxy["username"]}]}, "streamSettings": {"network": "hysteria", "security": "tls", "tlsSettings": {"alpn": ["h3"], "minVersion": "1.3", "maxVersion": "1.3", "certificates": [{"certificateFile": str(cert), "keyFile": str(key)}]}, "hysteriaSettings": {"version": 2, "auth": proxy["password"], "udpIdleTimeout": 60}, "finalmask": {"udp": [{"type": "salamander", "settings": {"password": self.cfg.hy2_obfs_password}}]}}}
+                    inbound["sniffing"] = {"enabled": True, "destOverride": ["http", "tls"]}
                     inbounds.append(inbound)
                     inbound_tags.append(inbound_tag)
             else:
@@ -465,6 +466,7 @@ class Panel:
                 if self.cfg.socks_udp and udp_ip:
                     settings["ip"] = udp_ip
                 inbound = {"tag": "socks-" + tag, "listen": self.cfg.socks_listen, "port": proxy["port"], "protocol": "socks", "settings": settings}
+                inbound["sniffing"] = {"enabled": True, "destOverride": ["http", "tls"]}
                 inbounds.append(inbound)
                 inbound_tags = ["socks-" + tag]
             outbounds.append(self.xray_outbound(proxy, proxy["ipv6"]))
