@@ -2,6 +2,7 @@
 set -eu
 
 PANEL_REPOSITORY="${PANEL_REPOSITORY:-https://github.com/xmeng-cx/ipv6-socks-panelv3.git}"
+PANEL_REPOSITORY_DIRECT="$PANEL_REPOSITORY"
 PANEL_INSTALL_DIR="${PANEL_INSTALL_DIR:-/opt/ipv6-socks-panelv3}"
 XRAY_VERSION="${XRAY_VERSION:-v26.5.9}"
 GITHUB_PROXY_BASE="${GITHUB_PROXY_BASE:-https://gh.xmeng.eu.org/}"
@@ -128,6 +129,31 @@ else
 fi
 PANEL_REPOSITORY="$(github_download_url "$PANEL_REPOSITORY")"
 
+git_fetch_main() {
+  REPOSITORY_DIR="$1"
+  if git -C "$REPOSITORY_DIR" -c http.version=HTTP/1.1 fetch "$PANEL_REPOSITORY" main; then
+    return 0
+  fi
+  if [ "$PANEL_REPOSITORY" != "$PANEL_REPOSITORY_DIRECT" ]; then
+    echo "GitHub 代理请求失败，正在回退到直连……" >&2
+    git -C "$REPOSITORY_DIR" -c http.version=HTTP/1.1 fetch "$PANEL_REPOSITORY_DIRECT" main
+    return $?
+  fi
+  return 1
+}
+
+git_clone_panel() {
+  if git -c http.version=HTTP/1.1 clone "$PANEL_REPOSITORY" "$PANEL_INSTALL_DIR"; then
+    return 0
+  fi
+  if [ "$PANEL_REPOSITORY" != "$PANEL_REPOSITORY_DIRECT" ]; then
+    echo "GitHub 代理请求失败，正在回退到直连……" >&2
+    git -c http.version=HTTP/1.1 clone "$PANEL_REPOSITORY_DIRECT" "$PANEL_INSTALL_DIR"
+    return $?
+  fi
+  return 1
+}
+
 if [ -n "$INSTALL_IPV6_PREFIX" ]; then
   if ! INSTALL_IPV6_PREFIX="$(python3 -c 'import ipaddress,sys; n=ipaddress.ip_network(sys.argv[1], strict=False); assert n.version == 6 and n.prefixlen < 128; print(n)' "$INSTALL_IPV6_PREFIX" 2>/dev/null)"; then
     echo "错误：IPv6 前缀无效，请填写类似 2001:470:846a::/48 的网段。" >&2
@@ -142,14 +168,14 @@ if [ -d "$PANEL_INSTALL_DIR/.git" ]; then
     git -C "$PANEL_INSTALL_DIR" stash push --include-untracked -m "$STASH_LABEL"
     echo "已将旧代码改动保存到 Git stash：$STASH_LABEL"
   fi
-  git -C "$PANEL_INSTALL_DIR" fetch "$PANEL_REPOSITORY" main
+  git_fetch_main "$PANEL_INSTALL_DIR"
   git -C "$PANEL_INSTALL_DIR" merge --ff-only FETCH_HEAD
 elif [ -e "$PANEL_INSTALL_DIR" ] && [ -n "$(find "$PANEL_INSTALL_DIR" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
   echo "错误：$PANEL_INSTALL_DIR 已存在且不是本项目的 Git 目录。" >&2
   exit 1
 else
   echo "正在下载项目…"
-  git clone "$PANEL_REPOSITORY" "$PANEL_INSTALL_DIR"
+  git_clone_panel
 fi
 
 case "$(uname -m)" in
