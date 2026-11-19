@@ -237,7 +237,8 @@ if command -v docker >/dev/null 2>&1 && docker inspect ipv6-socks-panel >/dev/nu
   docker stop ipv6-socks-panel >/dev/null
 fi
 
-systemctl enable --now ipv6-socks-panel
+systemctl enable ipv6-socks-panel
+systemctl restart ipv6-socks-panel
 
 if [ "$ENABLE_HTTPS" = "1" ]; then
   if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet nginx 2>/dev/null; then
@@ -283,7 +284,7 @@ systemctl --no-pager --full status ipv6-socks-panel || true
 if [ "$ENABLE_HTTPS" = "1" ]; then
   echo "部署完成：请打开 https://$HTTPS_DOMAIN"
 else
-  echo "部署完成：请打开 http://服务器IP:8080"
+  echo "部署完成：请输入 ipv6 查看当前访问地址。"
 fi
 echo "默认后台账号：xmeng / 5201314"
 echo "管理命令：ipv6"
