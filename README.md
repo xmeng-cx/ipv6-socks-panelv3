@@ -32,7 +32,7 @@ curl -fsSL https://raw.githubusercontent.com/xmeng-cx/ipv6-socks-panelv3/main/in
 如果当前网络无法直接访问 GitHub Raw，可从加速入口启动；脚本运行后仍会按公网 IP 自动决定后续下载是否继续使用代理：
 
 ```bash
-curl -fsSL https://gh.xmeng.eu.org/https://raw.githubusercontent.com/xmeng-cx/ipv6-socks-panelv3/main/install.sh | sh
+curl -fsSL https://gh.xmeng.eu.org/https://raw.githubusercontent.com/xmeng-cx/ipv6-socks-panelv3/refs/heads/main/install.sh | sh
 ```
 
 安装时会提示填写线路 IPv6 前缀，例如 `2001:470:846a::/48`。填写后会自动保存到 `.env`；直接回车留空则自动识别。重复安装升级时，留空不会覆盖已有前缀。
