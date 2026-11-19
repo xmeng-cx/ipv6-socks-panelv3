@@ -29,6 +29,12 @@
 curl -fsSL https://raw.githubusercontent.com/xmeng-cx/ipv6-socks-panelv3/main/install.sh | sh
 ```
 
+如果当前网络无法直接访问 GitHub Raw，可从加速入口启动；脚本运行后仍会按公网 IP 自动决定后续下载是否继续使用代理：
+
+```bash
+curl -fsSL https://gh.xmeng.eu.org/https://raw.githubusercontent.com/xmeng-cx/ipv6-socks-panelv3/main/install.sh | sh
+```
+
 安装时会提示填写线路 IPv6 前缀，例如 `2001:470:846a::/48`。填写后会自动保存到 `.env`；直接回车留空则自动识别。重复安装升级时，留空不会覆盖已有前缀。
 
 无人值守安装也可以直接指定前缀：
@@ -47,11 +53,12 @@ curl -fsSL https://raw.githubusercontent.com/xmeng-cx/ipv6-socks-panelv3/main/in
 
 安装脚本会：
 
-1. 安装 Python 3、curl、OpenSSL、iproute2、Git 和 unzip。
-2. 下载当前 CPU 架构对应的 Xray。
-3. 安装项目到 `/opt/ipv6-socks-panelv3`。
-4. 创建并启动 `ipv6-socks-panel.service`。
-5. 若检测到旧版同名 Docker 容器，则停止容器但保留它用于回退。
+1. 检测公网 IP 所属地区；中国大陆 IP 自动通过 `https://gh.xmeng.eu.org/` 下载 GitHub 项目和 Xray，其他地区直连 GitHub。
+2. 安装 Python 3、curl、OpenSSL、iproute2、Git 和 unzip。
+3. 下载当前 CPU 架构对应的 Xray。
+4. 安装项目到 `/opt/ipv6-socks-panelv3`。
+5. 创建并启动 `ipv6-socks-panel.service`，同时安装中文管理命令 `ipv6`。
+6. 若检测到旧版同名 Docker 容器，则停止容器但保留它用于回退。
 
 安装完成后打开：`http://服务器IP:8080`
 
@@ -92,6 +99,27 @@ systemctl restart ipv6-socks-panel
 
 ## 管理命令
 
+安装完成后直接输入：
+
+```bash
+ipv6
+```
+
+即可打开中文管理菜单，支持查看状态、启动、停止、重启、更新、查看日志、显示访问地址和修改面板端口。“更新面板”也会自动检测国内 IP 并选择 GitHub 代理。
+
+也支持直接执行子命令：
+
+```bash
+ipv6 status
+ipv6 restart
+ipv6 update
+ipv6 logs
+ipv6 access
+ipv6 port
+```
+
+原始 systemd 命令仍然可用：
+
 ```bash
 systemctl status ipv6-socks-panel
 journalctl -u ipv6-socks-panel -f
@@ -108,7 +136,9 @@ python3 app.py
 
 ## 升级
 
-重复执行一键安装命令即可拉取新版本并重启服务。`data/state.json`、TLS 证书和 `.env` 会保留。
+执行 `ipv6` 后选择“更新面板”，或直接执行 `ipv6 update` 即可拉取新版本并重启服务。更新时同样会自动检测国内 IP 并使用 `https://gh.xmeng.eu.org/`。`data/state.json`、TLS 证书和 `.env` 会保留。
+
+如需手动控制代理检测，可设置 `USE_GITHUB_PROXY=1` 强制使用代理、设置 `USE_GITHUB_PROXY=0` 强制直连；`PANEL_COUNTRY_CODE=CN` 可用于无人值守环境明确指定中国大陆地区。
 
 从 Docker 版原目录迁移时，也可以指定旧项目目录安装；Python 版兼容已有 `data/state.json`：
 

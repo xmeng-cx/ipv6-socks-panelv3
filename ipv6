@@ -1,0 +1,143 @@
+#!/bin/sh
+set -u
+
+PANEL_DIR="__INSTALL_DIR__"
+SERVICE_NAME="ipv6-socks-panel"
+ENV_FILE="$PANEL_DIR/.env"
+
+require_root() {
+  if [ "$(id -u)" -ne 0 ]; then
+    echo "错误：请使用 root 执行 ipv6 管理命令。" >&2
+    exit 1
+  fi
+}
+
+service_status() {
+  systemctl --no-pager --full status "$SERVICE_NAME" || true
+}
+
+service_action() {
+  ACTION="$1"
+  systemctl "$ACTION" "$SERVICE_NAME"
+  printf '服务当前状态：'
+  systemctl is-active "$SERVICE_NAME" || true
+}
+
+update_panel() {
+  if [ ! -f "$PANEL_DIR/install.sh" ]; then
+    echo "错误：找不到 $PANEL_DIR/install.sh" >&2
+    return 1
+  fi
+  echo "正在检测网络并更新面板……"
+  PANEL_INSTALL_DIR="$PANEL_DIR" ENABLE_HTTPS=0 sh "$PANEL_DIR/install.sh" --non-interactive --no-https
+}
+
+show_logs() {
+  echo "按 Ctrl+C 退出日志查看。"
+  journalctl -u "$SERVICE_NAME" -f
+}
+
+env_value() {
+  KEY="$1"
+  sed -n "s/^${KEY}=//p" "$ENV_FILE" 2>/dev/null | tail -n 1
+}
+
+show_access() {
+  LISTEN="$(env_value WEB_LISTEN)"
+  PORT="${LISTEN##*:}"
+  [ -n "$PORT" ] || PORT=8080
+  SCHEME=http
+  CERT_FILE="$(env_value TLS_CERT_FILE)"
+  if [ -n "$CERT_FILE" ] && [ -f "$CERT_FILE" ]; then SCHEME=https; fi
+  IPV4="$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([^ ]*\).*/\1/p' | head -n 1)"
+  IPV6="$(ip -6 addr show scope global 2>/dev/null | sed -n 's/.*inet6 \([^/]*\).*/\1/p' | head -n 1)"
+  echo "监听地址：${LISTEN:-[::]:8080}"
+  [ -z "$IPV4" ] || echo "IPv4 访问：$SCHEME://$IPV4:$PORT/"
+  [ -z "$IPV6" ] || echo "IPv6 访问：$SCHEME://[$IPV6]:$PORT/"
+}
+
+change_port() {
+  CURRENT_LISTEN="$(env_value WEB_LISTEN)"
+  [ -n "$CURRENT_LISTEN" ] || CURRENT_LISTEN='[::]:8080'
+  printf '当前监听地址：%s\n' "$CURRENT_LISTEN"
+  printf '请输入新的面板端口（1-65535）：'
+  IFS= read -r NEW_PORT
+  case "$NEW_PORT" in ''|*[!0-9]*) echo "错误：端口必须是数字。"; return 1 ;; esac
+  if [ "$NEW_PORT" -lt 1 ] || [ "$NEW_PORT" -gt 65535 ]; then
+    echo "错误：端口范围必须是 1-65535。"
+    return 1
+  fi
+  LISTEN_HOST="${CURRENT_LISTEN%:*}"
+  [ -n "$LISTEN_HOST" ] || LISTEN_HOST='[::]'
+  if grep -q '^WEB_LISTEN=' "$ENV_FILE"; then
+    sed -i "s|^WEB_LISTEN=.*|WEB_LISTEN=$LISTEN_HOST:$NEW_PORT|" "$ENV_FILE"
+  else
+    printf 'WEB_LISTEN=%s:%s\n' "$LISTEN_HOST" "$NEW_PORT" >> "$ENV_FILE"
+  fi
+  systemctl restart "$SERVICE_NAME"
+  echo "面板端口已修改为 $NEW_PORT。"
+  show_access
+}
+
+run_command() {
+  case "${1:-}" in
+    status) service_status ;;
+    start) service_action start ;;
+    stop) service_action stop ;;
+    restart) service_action restart ;;
+    update) update_panel ;;
+    logs) show_logs ;;
+    access) show_access ;;
+    port) change_port ;;
+    *) return 1 ;;
+  esac
+}
+
+show_menu() {
+  while true; do
+    printf '\033[2J\033[H'
+    echo "========================================"
+    echo "       IPv6 代理面板管理菜单"
+    echo "========================================"
+    printf '服务状态：'
+    systemctl is-active "$SERVICE_NAME" 2>/dev/null || true
+    echo
+    echo "  1. 查看服务状态"
+    echo "  2. 启动面板"
+    echo "  3. 停止面板"
+    echo "  4. 重启面板"
+    echo "  5. 更新面板"
+    echo "  6. 查看实时日志"
+    echo "  7. 查看访问地址"
+    echo "  8. 修改面板端口"
+    echo "  0. 退出"
+    echo "========================================"
+    printf '请输入选项：'
+    IFS= read -r CHOICE
+    case "$CHOICE" in
+      1) service_status ;;
+      2) service_action start ;;
+      3) service_action stop ;;
+      4) service_action restart ;;
+      5) update_panel ;;
+      6) show_logs ;;
+      7) show_access ;;
+      8) change_port ;;
+      0) exit 0 ;;
+      *) echo "无效选项，请重新输入。" ;;
+    esac
+    echo
+    printf '按回车键返回菜单……'
+    IFS= read -r _WAIT
+  done
+}
+
+require_root
+if [ "$#" -gt 0 ]; then
+  if ! run_command "$1"; then
+    echo "用法：ipv6 [status|start|stop|restart|update|logs|access|port]" >&2
+    exit 1
+  fi
+else
+  show_menu
+fi

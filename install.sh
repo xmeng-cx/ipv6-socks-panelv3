@@ -4,10 +4,14 @@ set -eu
 PANEL_REPOSITORY="${PANEL_REPOSITORY:-https://github.com/xmeng-cx/ipv6-socks-panelv3.git}"
 PANEL_INSTALL_DIR="${PANEL_INSTALL_DIR:-/opt/ipv6-socks-panelv3}"
 XRAY_VERSION="${XRAY_VERSION:-v26.5.9}"
+GITHUB_PROXY_BASE="${GITHUB_PROXY_BASE:-https://gh.xmeng.eu.org/}"
+USE_GITHUB_PROXY="${USE_GITHUB_PROXY:-auto}"
+PANEL_COUNTRY_CODE="${PANEL_COUNTRY_CODE:-}"
 ENABLE_HTTPS="${ENABLE_HTTPS:-}"
 HTTPS_DOMAIN="${HTTPS_DOMAIN:-}"
 HTTPS_EMAIL="${HTTPS_EMAIL:-}"
 INSTALL_IPV6_PREFIX="${PANEL_IPV6_PREFIX:-}"
+NON_INTERACTIVE=0
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -19,6 +23,7 @@ while [ "$#" -gt 0 ]; do
       if [ "$#" -gt 0 ] && [ "${1#--}" = "$1" ]; then HTTPS_EMAIL="$1"; shift; fi
       ;;
     --no-https) ENABLE_HTTPS=0; shift ;;
+    --non-interactive) NON_INTERACTIVE=1; shift ;;
     --ipv6-prefix)
       [ "$#" -ge 2 ] || { echo "错误：--ipv6-prefix 后必须提供 IPv6 前缀。" >&2; exit 1; }
       INSTALL_IPV6_PREFIX="$2"
@@ -36,6 +41,9 @@ fi
 HAS_TTY=0
 if [ -t 0 ] || [ -t 1 ] || [ -t 2 ]; then
   HAS_TTY=1
+fi
+if [ "$NON_INTERACTIVE" = "1" ]; then
+  HAS_TTY=0
 fi
 
 if [ -z "$INSTALL_IPV6_PREFIX" ] && [ "$HAS_TTY" = "1" ]; then
@@ -75,6 +83,51 @@ else
   exit 1
 fi
 
+detect_country_code() {
+  COUNTRY_CODE="$(printf '%s' "$PANEL_COUNTRY_CODE" | tr '[:lower:]' '[:upper:]' | tr -cd 'A-Z')"
+  if [ -z "$COUNTRY_CODE" ]; then
+    COUNTRY_RESPONSE="$(curl -4 -fsS --max-time 5 https://api.country.is 2>/dev/null || true)"
+    COUNTRY_CODE="$(printf '%s' "$COUNTRY_RESPONSE" | sed -n 's/.*"country"[[:space:]]*:[[:space:]]*"\([A-Za-z][A-Za-z]\)".*/\1/p' | tr '[:lower:]' '[:upper:]')"
+  fi
+  if [ -z "$COUNTRY_CODE" ]; then
+    COUNTRY_CODE="$(curl -4 -fsS --max-time 5 https://ipapi.co/country/ 2>/dev/null | tr '[:lower:]' '[:upper:]' | tr -cd 'A-Z' || true)"
+  fi
+  if [ -z "$COUNTRY_CODE" ]; then
+    COUNTRY_RESPONSE="$(curl -4 -fsS --max-time 5 https://myip.ipip.net 2>/dev/null || true)"
+    if printf '%s' "$COUNTRY_RESPONSE" | grep -q '中国'; then COUNTRY_CODE=CN; fi
+  fi
+  printf '%s' "$COUNTRY_CODE"
+}
+
+case "$GITHUB_PROXY_BASE" in */) ;; *) GITHUB_PROXY_BASE="$GITHUB_PROXY_BASE/" ;; esac
+COUNTRY_CODE="$(detect_country_code)"
+case "$USE_GITHUB_PROXY" in
+  1|true|TRUE|yes|YES) USE_GITHUB_PROXY=1 ;;
+  0|false|FALSE|no|NO) USE_GITHUB_PROXY=0 ;;
+  auto|AUTO|'') if [ "$COUNTRY_CODE" = "CN" ]; then USE_GITHUB_PROXY=1; else USE_GITHUB_PROXY=0; fi ;;
+  *) echo "错误：USE_GITHUB_PROXY 仅支持 auto、1 或 0。" >&2; exit 1 ;;
+esac
+
+github_download_url() {
+  case "$1" in
+    https://github.com/*|https://raw.githubusercontent.com/*)
+      if [ "$USE_GITHUB_PROXY" = "1" ]; then printf '%s%s' "$GITHUB_PROXY_BASE" "$1"; else printf '%s' "$1"; fi
+      ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+if [ "$USE_GITHUB_PROXY" = "1" ]; then
+  echo "检测到中国大陆 IP，GitHub 下载将使用代理：$GITHUB_PROXY_BASE"
+else
+  if [ -n "$COUNTRY_CODE" ]; then
+    echo "检测到当前地区：$COUNTRY_CODE，GitHub 下载使用直连。"
+  else
+    echo "未能识别 IP 地区，GitHub 下载使用直连。"
+  fi
+fi
+PANEL_REPOSITORY="$(github_download_url "$PANEL_REPOSITORY")"
+
 if [ -n "$INSTALL_IPV6_PREFIX" ]; then
   if ! INSTALL_IPV6_PREFIX="$(python3 -c 'import ipaddress,sys; n=ipaddress.ip_network(sys.argv[1], strict=False); assert n.version == 6 and n.prefixlen < 128; print(n)' "$INSTALL_IPV6_PREFIX" 2>/dev/null)"; then
     echo "错误：IPv6 前缀无效，请填写类似 2001:470:846a::/48 的网段。" >&2
@@ -110,7 +163,8 @@ if ! /usr/local/bin/xray version >/dev/null 2>&1; then
   echo "正在安装 Xray $XRAY_VERSION…"
   XRAY_TEMP_DIR="$(mktemp -d)"
   trap 'rm -rf "$XRAY_TEMP_DIR"' EXIT
-  curl -fL "https://github.com/XTLS/Xray-core/releases/download/$XRAY_VERSION/Xray-linux-$XRAY_ARCH.zip" -o "$XRAY_TEMP_DIR/xray.zip"
+  XRAY_DOWNLOAD_URL="$(github_download_url "https://github.com/XTLS/Xray-core/releases/download/$XRAY_VERSION/Xray-linux-$XRAY_ARCH.zip")"
+  curl -fL "$XRAY_DOWNLOAD_URL" -o "$XRAY_TEMP_DIR/xray.zip"
   unzip -q "$XRAY_TEMP_DIR/xray.zip" -d "$XRAY_TEMP_DIR/xray"
   install -m 0755 "$XRAY_TEMP_DIR/xray/xray" /usr/local/bin/xray
   mkdir -p /usr/local/share/xray
@@ -148,6 +202,8 @@ mkdir -p data
 chmod 700 data
 
 sed "s|__INSTALL_DIR__|$PANEL_INSTALL_DIR|g" ipv6-socks-panel.service > /etc/systemd/system/ipv6-socks-panel.service
+sed "s|__INSTALL_DIR__|$PANEL_INSTALL_DIR|g" ipv6 > /usr/local/bin/ipv6
+chmod 0755 /usr/local/bin/ipv6
 systemctl daemon-reload
 
 if command -v docker >/dev/null 2>&1 && docker inspect ipv6-socks-panel >/dev/null 2>&1; then
@@ -204,3 +260,4 @@ else
   echo "部署完成：请打开 http://服务器IP:8080"
 fi
 echo "默认后台账号：xmeng / 5201314"
+echo "管理命令：ipv6"
