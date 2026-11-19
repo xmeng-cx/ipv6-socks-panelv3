@@ -1062,10 +1062,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if not user:
                     self.send_error(404)
                     return
-                # Export the same host the user used to request the subscription:
-                # IPv4 access yields IPv4 nodes, IPv6 yields IPv6, and a domain
-                # yields domain nodes. HY2_LISTEN is independent from this.
+                # IPv6 nodes must use the address where Xray listens. The
+                # subscription HTTP server may be reached through any other
+                # IPv6 assigned to this host, including a rotating egress IP.
                 host = host_without_port(self.headers.get("Host", "localhost"))
+                with contextlib.suppress(ValueError):
+                    if ipaddress.ip_address(host).version == 6:
+                        listener = getattr(self.panel.cfg, "hy2_listen", "") or self.panel.network.get("ipv6", "")
+                        if listener == "::":
+                            listener = self.panel.network.get("ipv6", "")
+                        if listener and ipaddress.ip_address(listener).version == 6:
+                            host = listener
                 body = mihomo_config(self.panel.list_for_user(user["username"]), host, self.panel.cfg.hy2_obfs_password, self.panel.state["directRules"], self.panel.cfg.tls_enabled).encode()
                 self.send_response(200); self.security_headers(); self.send_header("Content-Type", "text/yaml; charset=utf-8"); self.send_header("Cache-Control", "no-store"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
             if path == "/api/v1/auth/me":
