@@ -14,6 +14,7 @@
 - 每个账号有独立 Mihomo 订阅链接；配置使用 `mode: rule`，除管理员设置的直连规则外，其他流量默认走“全局代理”。
 - 线路复制和订阅跟随面板访问地址：通过 IPv4 打开导出 IPv4，通过 IPv6 打开导出 IPv6，通过域名打开导出域名。
 - 管理员“直连设置”支持域名、IPv4、IPv6 和 CIDR，每行一项。
+- 换 IP 后的出口验证默认关闭，管理员可在页面随时开关；开启后中国大陆 IP 自动使用国内 IPv6 检测接口，其他地区使用通用接口。
 - systemd 开机自启和故障自动重启。
 
 ## 系统要求
@@ -84,6 +85,13 @@ HY2_OBFS_PASSWORD=5201314
 # 默认留空自动识别
 IPV6_INTERFACE=
 IPV6_PREFIX=
+
+# 默认关闭；开启后才请求外部网站核对出口 IPv6
+IP_CHECK_ENABLED=false
+IP_CHECK_REGION=auto
+IP_CHECK_URL_CN=https://v6.api.myipdns.com/
+IP_CHECK_URL=https://api64.ipify.org
+IP_CHECK_RETRIES=1
 
 # 客户端连接地址；有域名时建议填写
 ADVERTISE_HOST=
@@ -181,7 +189,7 @@ curl -b panel-cookie.txt -X POST -H 'Content-Type: application/json' \
 # 查看当前账号线路
 curl -b panel-cookie.txt http://SERVER_IP:8080/api/v1/proxies
 
-# 无需登录：按用户名更换全部线路 IP，等待验证完成后直接返回结果
+# 无需登录：按用户名更换全部线路 IP，等待切换完成后直接返回结果
 curl 'https://panel.example.com/api/v1/rotate-ip?username=alice'
 
 # 无需登录：按用户名和端口只更换单条线路；线路 ID 就是端口号
@@ -193,7 +201,7 @@ curl -b panel-cookie.txt -X POST http://SERVER_IP:8080/api/v1/proxies/20001/rota
 curl -b panel-cookie.txt -X DELETE http://SERVER_IP:8080/api/v1/proxies/20001
 ```
 
-公开 GET 换 IP 接口是同步接口，不需要登录或 Cookie。它会生成新 IPv6、验证该地址的公网出口，再通过 Xray HandlerService API 只热替换目标线路的 outbound，不重启 Xray，也不中断其他线路。全部成功后返回 HTTP 200；成功线路包含 `verified: true`，且 `verifiedIpv6` 与 `newIpv6` 一致。验证失败时返回 `verified: false` 和具体错误，并恢复旧 IPv6。
+公开 GET 换 IP 接口是同步接口，不需要登录或 Cookie。它会生成并确认新 IPv6 已添加，再通过 Xray HandlerService API 只热替换目标线路的 outbound，不重启 Xray，也不中断其他线路。出口验证关闭时成功线路包含 `ipChanged: true`、`verified: false`；开启时还会核对公网出口，成功后返回 `verified: true` 和 `verifiedIpv6`。验证失败时恢复旧 IPv6。
 
 ## 数据与安全
 

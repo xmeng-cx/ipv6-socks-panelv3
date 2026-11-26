@@ -13,7 +13,7 @@
       <div>
         <p class="eyebrow">XRAY · IPV6 EGRESS</p>
         <h1>IPv6 线路控制台</h1>
-        <p class="subtitle">每条入口独享 IPv6，切换前验证，失败自动保留旧线路。</p>
+        <p class="subtitle">每条入口独享 IPv6，出口验证可由管理员随时开启或关闭。</p>
       </div>
       <div class="accountBar"><div id="healthBadge" class="health pending"><span></span>正在连接</div><span id="currentUser" class="accountName">—</span><button id="logoutBtn" class="smallBtn">退出</button></div>
     </header>
@@ -56,7 +56,7 @@
     <section id="userAdmin" class="adminPanel hidden">
       <div class="toolbar">
         <div><p class="eyebrow">ACCESS CONTROL</p><h2>用户管理</h2><p>普通用户只能查看和操作自己的线路。</p></div>
-        <div class="actions"><button id="directSettingsBtn" class="button secondary">直连设置</button><button id="addUserBtn" class="button secondary">＋ 添加用户</button></div>
+        <div class="actions"><label id="egressCheckControl" class="egressToggle"><input id="egressCheckInput" type="checkbox"><span id="egressCheckText">出口验证：关闭</span></label><button id="directSettingsBtn" class="button secondary">直连设置</button><button id="addUserBtn" class="button secondary">＋ 添加用户</button></div>
       </div>
       <div class="tableWrap compact"><table><thead><tr><th>用户名</th><th>角色</th><th>线路数</th><th>订阅</th><th class="right">操作</th></tr></thead><tbody id="userRows"></tbody></table></div>
     </section>
@@ -72,7 +72,7 @@
       <label class="field protocolField"><span>创建数量</span><input id="proxyCountInput" type="number" min="1" max="100" value="1" inputmode="numeric" required></label>
       <label class="check"><input id="manualPort" type="checkbox"><span>手动指定端口</span></label>
       <label id="portField" class="field hidden"><span>端口</span><input id="portInput" type="number" min="1" max="65535" inputmode="numeric"></label>
-      <p class="dialogNote">管理员可以为指定账号批量创建线路。数量大于 1 时端口自动分配，每条线路都会生成并验证独立的公网 IPv6。</p>
+      <p class="dialogNote">管理员可以为指定账号批量创建线路。数量大于 1 时端口自动分配；是否验证公网出口由管理员开关控制。</p>
       <div class="dialogActions"><button value="cancel" class="button ghost">取消</button><button id="confirmAdd" value="default" class="button primary">创建线路</button></div>
     </form>
   </dialog>
@@ -92,7 +92,7 @@
       <div class="dialogHead"><div><p class="eyebrow">NETWORK</p><h3>修改 IPv6 网络</h3></div><button value="cancel" class="iconBtn" aria-label="关闭">×</button></div>
       <label class="field prefixField"><span>网卡</span><input id="interfaceInput" type="text" spellcheck="false" placeholder="例如 eth0，留空自动识别"></label>
       <label class="field networkField"><span>IPv6 前缀</span><input id="prefixInput" type="text" spellcheck="false" placeholder="例如 2408:1234:5678:9abc::/64"></label>
-      <p class="dialogNote">保存后会为所有线路生成新 IPv6，验证通过后切换。网卡和前缀都留空可恢复自动识别。</p>
+      <p class="dialogNote">保存后会为所有线路生成新 IPv6 并切换；开启出口验证时才请求外部检测站。网卡和前缀都留空可恢复自动识别。</p>
       <div class="dialogActions"><button value="cancel" class="button ghost">取消</button><button id="confirmPrefix" value="default" class="button primary">保存并切换</button></div>
     </form>
   </dialog>

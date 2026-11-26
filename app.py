@@ -119,8 +119,13 @@ class Config:
         self.max_proxies = int(os.getenv("MAX_PROXIES", "100"))
         self.ipv6_interface = os.getenv("IPV6_INTERFACE", "").strip()
         self.ipv6_prefix = os.getenv("IPV6_PREFIX", "").strip()
+        self.ip_check_enabled = env_bool("IP_CHECK_ENABLED", False)
+        self.ip_check_region = os.getenv("IP_CHECK_REGION", "auto").strip().lower() or "auto"
         self.ip_check_url = os.getenv("IP_CHECK_URL", "https://api64.ipify.org")
+        self.ip_check_url_cn = os.getenv("IP_CHECK_URL_CN", "https://v6.api.myipdns.com/")
+        self.ip_country_url = os.getenv("IP_COUNTRY_URL", "https://api.country.is")
         self.ip_check_timeout = env_seconds("IP_CHECK_TIMEOUT", 10)
+        self.ip_check_retries = int(os.getenv("IP_CHECK_RETRIES", "1"))
         self.dad_timeout = env_seconds("DAD_TIMEOUT", 8)
         if not 1 <= self.max_proxies <= 100:
             raise ValueError("MAX_PROXIES must be between 1 and 100")
@@ -128,6 +133,10 @@ class Config:
             raise ValueError("INITIAL_PROXIES must be between 0 and MAX_PROXIES")
         if bool(self.tls_cert_file) != bool(self.tls_key_file):
             raise ValueError("TLS_CERT_FILE and TLS_KEY_FILE must be configured together")
+        if self.ip_check_region not in ("auto", "cn", "global"):
+            raise ValueError("IP_CHECK_REGION must be auto, cn or global")
+        if not 1 <= self.ip_check_retries <= 3:
+            raise ValueError("IP_CHECK_RETRIES must be between 1 and 3")
 
     @property
     def tls_enabled(self):
@@ -173,6 +182,7 @@ class Panel:
         self.stopping = threading.Event()
         self.network = {}
         self.prefix = None
+        self._ip_check_country = None
         self.state_path = cfg.data_dir / "state.json"
         self.state = self._load_state()
 
@@ -189,6 +199,7 @@ class Panel:
         state.setdefault("proxies", [])
         state.setdefault("pending", {})
         state.setdefault("users", [])
+        state.setdefault("egressCheckEnabled", bool(getattr(self.cfg, "ip_check_enabled", False)))
         if version < 4:
             state["directRules"] = normalize_direct_rules(DEFAULT_DIRECT_RULES + state.get("directRules", []))
         else:
@@ -391,28 +402,75 @@ class Panel:
         cidr = "%s/%d" % (ip, self.prefix.prefixlen)
         self.run(["ip", "-6", "addr", "del", cidr, "dev", self.network["interface"]], check=False)
 
+    def egress_check_enabled(self):
+        return bool(self.state.get("egressCheckEnabled", False))
+
+    def set_egress_check(self, enabled):
+        with self.lock:
+            self.state["egressCheckEnabled"] = bool(enabled)
+            self.save()
+            return self.egress_check_enabled()
+
+    def ip_check_country(self):
+        region = self.cfg.ip_check_region
+        if region == "cn":
+            return "CN"
+        if region == "global":
+            return "GLOBAL"
+        cached = getattr(self, "_ip_check_country", None)
+        if cached:
+            return cached
+        result = self.run(
+            ["curl", "-4", "--noproxy", "*", "-fsS", "--max-time", "3", self.cfg.ip_country_url],
+            timeout=5, check=False,
+        )
+        country = "GLOBAL"
+        if result.returncode == 0:
+            with contextlib.suppress(ValueError):
+                payload = json.loads(result.stdout)
+                code = str(payload.get("country") or payload.get("country_code") or "").upper()
+                if code == "CN":
+                    country = "CN"
+        self._ip_check_country = country
+        return country
+
+    @staticmethod
+    def observed_ip(value):
+        text = str(value or "").strip()
+        with contextlib.suppress(ValueError, AttributeError):
+            payload = json.loads(text)
+            for key in ("ip", "query", "origin", "address"):
+                if payload.get(key):
+                    text = str(payload[key])
+                    break
+        candidates = [text]
+        candidates.extend(re.split(r"[^0-9A-Fa-f:.]+", text))
+        for candidate in candidates:
+            candidate = candidate.strip().strip("[](),;")
+            with contextlib.suppress(ValueError):
+                return ipaddress.ip_address(candidate)
+        raise RuntimeError("出口验证接口没有返回有效 IP")
+
     def check_egress(self, ip):
-        # A burst of newly activated source addresses can briefly time out at
-        # public IP-check services. Retry each line independently; this keeps
-        # bulk rotation fully parallel without accepting an unverified address.
+        if not self.egress_check_enabled():
+            return False
+        # When explicitly enabled, verify each line independently so bulk
+        # rotation remains parallel. Disabled mode never calls an external site.
         attempt_timeout = min(self.cfg.ip_check_timeout, 4)
+        check_url = self.cfg.ip_check_url_cn if self.ip_check_country() == "CN" else self.cfg.ip_check_url
         result = None
-        for attempt in range(3):
-            result = self.run(["curl", "-6", "--interface", str(ip), "-fsS", "--max-time", str(attempt_timeout), self.cfg.ip_check_url], timeout=attempt_timeout + 3, check=False)
+        for attempt in range(self.cfg.ip_check_retries):
+            result = self.run(["curl", "-6", "--noproxy", "*", "--interface", str(ip), "-fsS", "--max-time", str(attempt_timeout), check_url], timeout=attempt_timeout + 3, check=False)
             if not result.returncode:
                 break
-            if attempt < 2:
+            if attempt + 1 < self.cfg.ip_check_retries:
                 time.sleep(.25 * (attempt + 1))
         if result.returncode:
-            raise RuntimeError("IPv6 出站验证失败（已重试 3 次）: %s" % result.stderr.strip())
-        observed = result.stdout.strip()
-        try:
-            payload = json.loads(observed)
-            observed = payload.get("ip", observed)
-        except ValueError:
-            pass
-        if ipaddress.ip_address(observed.strip()) != ipaddress.ip_address(ip):
+            raise RuntimeError("IPv6 出站验证失败（%s）: %s" % (check_url, result.stderr.strip()))
+        observed = self.observed_ip(result.stdout)
+        if observed != ipaddress.ip_address(ip):
             raise RuntimeError("IPv6 出站不一致，预期 %s，实际 %s" % (ip, observed))
+        return True
 
     def ensure_certificate(self):
         if self.cfg.tls_enabled:
@@ -681,7 +739,7 @@ class Panel:
             replaced = False
             try:
                 self.add_address(new)
-                self.check_egress(new)
+                egress_verified = self.check_egress(new)
                 self.replace_xray_outbound(proxy, old, new)
                 replaced = True
                 with self.lock:
@@ -690,7 +748,9 @@ class Panel:
                     self.save()
                     self.write_xray_config()
                 self.delete_address(old)
-                return dict(proxy)
+                result = dict(proxy)
+                result["egressVerified"] = egress_verified
+                return result
             except Exception:
                 with self.lock:
                     proxy["ipv6"] = old
@@ -1025,7 +1085,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 item = job["items"][proxy["id"]]
                 try:
                     updated = self.panel.rotate_proxy(owner, proxy["id"])
-                    item.update({"status": "success", "newIpv6": updated["ipv6"], "verified": True, "verifiedIpv6": updated["ipv6"]})
+                    verified = bool(updated.get("egressVerified", True))
+                    item.update({"status": "success", "newIpv6": updated["ipv6"], "ipChanged": True, "verified": verified})
+                    if verified:
+                        item["verifiedIpv6"] = updated["ipv6"]
                     succeeded = True
                 except Exception as exc:
                     item.update({"status": "failed", "verified": False, "error": str(exc)})
@@ -1085,7 +1148,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 proxies = self.panel.list_for_user(user["username"])
                 xray_running = bool(self.panel.xray and self.panel.xray.poll() is None)
                 result = {"status": "healthy" if xray_running else "unhealthy", "message": "ok" if xray_running else "Xray 未运行", "xrayRunning": xray_running, "proxyCount": len(proxies), "initialProxies": self.panel.cfg.initial_proxies, "maxProxies": self.panel.cfg.max_proxies, "basePort": self.panel.cfg.base_port, "username": user["username"], "role": user["role"], "isAdmin": user["role"] == "admin", "advertiseHost": self.panel.cfg.advertise_host, "udp": self.panel.cfg.socks_udp, "hy2ObfsPassword": self.panel.cfg.hy2_obfs_password, "tlsVerified": self.panel.cfg.tls_enabled, "subscriptionUrl": self.subscription_url(user["subscriptionToken"])}
-                if user["role"] == "admin": result.update({"network": self.panel.network, "totalProxyCount": len(self.panel.state["proxies"]), "directRules": self.panel.state["directRules"]})
+                if user["role"] == "admin": result.update({"network": self.panel.network, "totalProxyCount": len(self.panel.state["proxies"]), "directRules": self.panel.state["directRules"], "egressCheckEnabled": self.panel.egress_check_enabled()})
                 self.json_response(200 if xray_running else 503, result); return
             if path == "/api/v1/proxies":
                 user = self.require_user()
@@ -1173,6 +1236,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 info = self.panel.update_network(data.get("interface", ""), data.get("prefix", "")); self.json_response(200, {"network": info}); return
             if path == "/api/v1/subscription/settings":
                 rules = normalize_direct_rules(data.get("directRules", [])); self.panel.state["directRules"] = rules; self.panel.save(); self.json_response(200, {"directRules": rules}); return
+            if path == "/api/v1/settings/egress-check":
+                enabled = data.get("enabled")
+                if not isinstance(enabled, bool): raise PanelError("enabled 必须是布尔值", 400, "invalid_enabled")
+                enabled = self.panel.set_egress_check(enabled); self.json_response(200, {"enabled": enabled}); return
             raise PanelError("接口不存在", 404, "not_found")
         except Exception as error:
             self.error_response(error)

@@ -21,6 +21,7 @@ class ConfigStub:
         self.base_port = 20000
         self.max_proxies = 100
         self.dad_timeout = 1
+        self.ip_check_enabled = False
         self.tls_enabled = False
 
 
@@ -37,7 +38,7 @@ class HTTPPanelStub:
         self.cfg.advertise_host = ""
         self.cfg.socks_udp = True
         self.cfg.hy2_obfs_password = "5201314"
-        self.state = {"sessionSecret": "test-secret", "directRules": [], "proxies": [], "users": [
+        self.state = {"sessionSecret": "test-secret", "directRules": [], "egressCheckEnabled": False, "proxies": [], "users": [
             app.new_user("xmeng", "5201314", "admin"), app.new_user("alice", "alice123", "user")
         ]}
         self.network = {"interface": "eth0", "prefix": "2001:db8::/64", "ipv4": "192.0.2.1"}
@@ -63,8 +64,42 @@ class HTTPPanelStub:
         self.created = (owner, protocol, count, port)
         return [{"id": "20000", "port": 20000, "owner": owner, "protocol": protocol}]
 
+    def egress_check_enabled(self):
+        return self.state["egressCheckEnabled"]
+
+    def set_egress_check(self, enabled):
+        self.state["egressCheckEnabled"] = enabled
+        return enabled
+
 
 class PanelPythonTests(unittest.TestCase):
+    def test_disabled_egress_check_skips_external_request(self):
+        panel = app.Panel.__new__(app.Panel)
+        panel.state = {"egressCheckEnabled": False}
+        panel.run = lambda *_args, **_kwargs: self.fail("disabled check must not perform a request")
+        self.assertFalse(panel.check_egress(ipaddress.ip_address("2001:db8::2")))
+
+    def test_cn_egress_check_uses_domestic_ipv6_endpoint(self):
+        panel = app.Panel.__new__(app.Panel)
+        panel.state = {"egressCheckEnabled": True}
+        panel._ip_check_country = None
+        panel.cfg = SimpleNamespace(
+            ip_check_region="auto", ip_country_url="https://country.example",
+            ip_check_url_cn="https://cn.example/ip", ip_check_url="https://global.example/ip",
+            ip_check_timeout=4, ip_check_retries=1,
+        )
+        calls = []
+
+        def fake_run(args, timeout=20, check=True):
+            calls.append(args)
+            if "-4" in args:
+                return SimpleNamespace(returncode=0, stdout='{"country":"CN"}', stderr="")
+            return SimpleNamespace(returncode=0, stdout="2001:db8::2\n", stderr="")
+
+        panel.run = fake_run
+        self.assertTrue(panel.check_egress(ipaddress.ip_address("2001:db8::2")))
+        self.assertEqual(calls[-1][-1], "https://cn.example/ip")
+
     def test_auto_discovery_uses_kernel_route_source_with_explicit_interface(self):
         with tempfile.TemporaryDirectory() as directory:
             panel = app.Panel(ConfigStub(directory))
@@ -211,6 +246,14 @@ class PanelPythonTests(unittest.TestCase):
             health = json.loads(response.read())
             self.assertEqual(response.status, 200)
             self.assertTrue(health["subscriptionUrl"].startswith("https://panel.example.com/sub/"))
+
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
+            connection.request("PUT", "/api/v1/settings/egress-check", json.dumps({"enabled": True}), {"Content-Type": "application/json", "Cookie": admin_cookie})
+            response = connection.getresponse()
+            setting = json.loads(response.read())
+            self.assertEqual(response.status, 200)
+            self.assertTrue(setting["enabled"])
+            self.assertTrue(panel.state["egressCheckEnabled"])
         finally:
             server.shutdown()
             server.server_close()

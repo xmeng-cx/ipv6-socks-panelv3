@@ -127,6 +127,10 @@ async function refresh() {
     $("editPrefixBtn").classList.toggle("hidden", !health.isAdmin);
     $("addBtn").classList.toggle("hidden", !health.isAdmin);
     $("userAdmin").classList.toggle("hidden", !health.isAdmin);
+    if (health.isAdmin) {
+      $("egressCheckInput").checked = Boolean(health.egressCheckEnabled);
+      $("egressCheckText").textContent = `出口验证：${health.egressCheckEnabled ? "开启" : "关闭"}`;
+    }
     $("rangeHint").textContent = `端口 ${health.basePort}–${health.basePort + health.maxProxies - 1} · TCP${health.udp ? " + UDP" : ""}`;
     const badge = $("healthBadge"); badge.className = "health ok"; badge.innerHTML = "<span></span>系统正常";
     renderRows(list.proxies);
@@ -159,7 +163,8 @@ async function createProxy(event) {
 }
 
 async function rotateAll() {
-  if (!confirm("确认更换全部线路的 IPv6？每条线路会独立验证并切换。")) return;
+  const mode = system?.egressCheckEnabled ? "每条线路会并行验证出口后切换。" : "当前出口验证已关闭，只确认新 IP 添加成功后切换。";
+  if (!confirm(`确认更换全部线路的 IPv6？${mode}`)) return;
   $("rotateAllBtn").disabled = true;
   try {
     const job = await api("/api/v1/proxies/rotate-all", {method:"POST", body:"{}"});
@@ -233,6 +238,20 @@ async function updateDirectRules(event) {
   finally { $("confirmDirect").disabled = false; }
 }
 
+async function updateEgressCheck(event) {
+  const enabled = event.target.checked;
+  event.target.disabled = true;
+  try {
+    const result = await api("/api/v1/settings/egress-check", {method:"PUT", body:JSON.stringify({enabled})});
+    system.egressCheckEnabled = result.enabled;
+    $("egressCheckText").textContent = `出口验证：${result.enabled ? "开启" : "关闭"}`;
+    toast(result.enabled ? "出口验证已开启；国内 IP 自动使用国内检测站" : "出口验证已关闭；换 IP 不再请求外部网站");
+  } catch (error) {
+    event.target.checked = !enabled;
+    toast(error.message, true);
+  } finally { event.target.disabled = false; }
+}
+
 async function pollJob(id) {
   try {
     const job = await api(`/api/v1/jobs/${id}`);
@@ -271,6 +290,7 @@ $("addUserBtn").addEventListener("click", () => { $("newUsername").value=""; $("
 $("userForm").addEventListener("submit", createUser);
 $("directSettingsBtn").addEventListener("click", () => { $("directRulesInput").value = (system?.directRules || []).join("\n"); $("directDialog").showModal(); });
 $("directForm").addEventListener("submit", updateDirectRules);
+$("egressCheckInput").addEventListener("change", updateEgressCheck);
 $("logoutBtn").addEventListener("click", logout);
 $("copySubscriptionBtn").addEventListener("click", async () => {
   try { await copyText($("subscriptionUrl").value); toast("Mihomo 订阅链接已复制"); }
